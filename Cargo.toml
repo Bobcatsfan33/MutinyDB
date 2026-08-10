@@ -1,0 +1,48 @@
+# MutinyDB — the workspace.
+#
+# It carries NO ENGINE CODE, deliberately, and carries none until M1.
+#
+# CONSOLIDATION-ROADMAP.md §4 M0 says the exit gate is "CI skeleton (fmt/clippy/test/no-egress)
+# green on an empty workspace" — the seam is wired before the code arrives, so M1's first commit
+# inherits a gate that is already red-if-broken rather than one written to fit whatever it built.
+# M0 writes decision records and nothing else: no bridge code (M1), no operators (M2), no mounted
+# planes (M3).
+#
+# `members` is not literally empty, because a literally empty virtual workspace is not something
+# cargo can act on: `cargo fmt --all` exits 1 with "Failed to find targets", and clippy and test
+# both refuse with "the manifest is virtual, and the workspace has no members". A CI skeleton whose
+# four jobs all error out is not a green gate, and a skeleton whose jobs are skipped or `|| true`'d
+# into passing is worse — it is a gate that reports success while measuring nothing, which is the
+# exact failure mode I-10 exists to prevent. So the workspace holds exactly one member,
+# `mutiny-charter`, which contains no engine code of any kind: it is the M0 exit gate expressed as
+# a test (the decision records are present, well-formed, and accepted), and it gives fmt, clippy
+# and test something real to be green *about*.
+#
+# What this file is allowed to grow, and when:
+#   M1  crates/mutiny-bridge         substrate commit stream -> Current epoch inputs (MD-2)
+#   M2  crates/mutiny-semantic       Prism's operators inside the compute plane
+#   M3  crates/mutiny-trust          Loom's planes mounted over the shared catalog
+#   M6  crates/mutinyd               the one process, the three doors
+# Nothing may be added ahead of its phase. (§6: "no phase starts before its named gates".)
+[workspace]
+resolver = "3"
+members = ["crates/mutiny-charter"]
+
+# Every sibling repository consumes its dependencies by pinned tag, never by branch and never by
+# fork (§6, R-4). This section is the place those pins will live, and it is empty for the same
+# reason `members` is: M0 takes no dependency on anything.
+[workspace.dependencies]
+
+# The lints M1's crates inherit with `[lints] workspace = true`. They are stated here, in the
+# phase that has no code, because a lint added after the code exists is a lint that gets
+# `#[allow]`d instead of obeyed. Current's D-1 discipline, adopted verbatim: no unsafe, and no
+# panicking constructs in library code.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"

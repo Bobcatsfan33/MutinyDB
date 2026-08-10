@@ -1,0 +1,11 @@
+[package]
+name = "mutiny-charter"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "The M0 exit gate: MutinyDB's decision records are present, well-formed, and accepted."
+
+[dependencies]
+
+[lints]
+workspace = true

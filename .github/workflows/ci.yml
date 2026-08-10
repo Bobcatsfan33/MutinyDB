@@ -1,0 +1,128 @@
+name: CI
+
+# The M0 skeleton: fmt, clippy -D warnings, test, no-egress (CONSOLIDATION-ROADMAP.md §4 M0).
+#
+# It is wired before there is any engine code to run through it, so that M1's first commit inherits
+# a gate that is already red-if-broken rather than one written afterwards to fit whatever it built.
+# Today the `test` job runs the M0 charter gate — the decision records are present, well-formed and
+# accepted, and the validator that says so has been watched failing on each rule it enforces.
+#
+# Green locally is not done. Green here is done.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # 04:23 UTC. An odd minute on purpose, and a different one from Current's 03:17, so the two
+    # repositories' nightlies do not queue behind each other on the same shared runners.
+    - cron: "23 4 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail rather than hang if the network is unexpectedly involved.
+  CARGO_NET_RETRY: 2
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy -D warnings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # --all-targets so tests are linted too: the workspace forbids unsafe and denies
+      # unwrap/expect/panic, and the allowances that re-enable them in tests must be explicit.
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-features --locked
+      # Again, alone and uncaptured, so the M0 gate's result is legible in the job log rather than
+      # buried among the mutation tests that prove it can fail.
+      - name: The M0 charter gate (MD-1…MD-4 present, well-formed, accepted)
+        run: cargo test -p mutiny-charter --locked --test m0_gate -- --nocapture
+
+  no-egress:
+    name: no-egress
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The only step permitted to reach the network. Everything after it runs with the network
+      # removed, so anything that tries to fetch, phone home, or reach a fixture server fails.
+      - name: Fetch dependencies (the only networked step)
+        run: cargo fetch --locked
+
+      - name: Build the suite offline
+        run: cargo test --workspace --all-features --locked --offline --no-run
+
+      # A no-egress job that silently still has egress proves nothing, so the sandbox is verified
+      # before it is trusted: unshare must work, and inside it a connection must fail.
+      - name: Prove the sandbox really has no network
+        run: |
+          set -euo pipefail
+          # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor, so `unshare -rn`
+          # fails on a stock runner. Lifting that one restriction is enough; the alternative —
+          # running the suite as root under `sudo unshare -n` — would test it as a different user
+          # than every other job.
+          if ! unshare -rn true 2>/dev/null; then
+            echo "unprivileged user namespaces are restricted; enabling them for this runner"
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if ! unshare -rn true; then
+            echo "::error::unshare -rn is unavailable on this runner; this job cannot prove the" \
+                 "absence of egress and must not pass by default"
+            exit 1
+          fi
+          if unshare -rn timeout 5 bash -c 'exec 3<>/dev/tcp/1.1.1.1/53' 2>/dev/null; then
+            echo "::error::a TCP connection succeeded inside the sandbox; the no-egress job would" \
+                 "be measuring nothing"
+            exit 1
+          fi
+          echo "sandbox verified: unshare works and outbound TCP fails inside it"
+
+      - name: Run the whole suite with no network
+        run: unshare -rn cargo test --workspace --all-features --locked --offline
+
+  # A single required check, so branch protection has one name to point at rather than four that
+  # drift as jobs are added.
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy, test, no-egress]
+    if: always()
+    steps:
+      - name: Fail if any job did not succeed
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "::error::at least one CI job did not succeed"
+            exit 1
+          fi
+          echo "all CI jobs succeeded"
