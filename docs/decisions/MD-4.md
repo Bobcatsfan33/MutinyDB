@@ -172,6 +172,50 @@ down to a handful of proper nouns.
   three-year-old sweep in a repository is the one that finds the name was taken last spring. The M8
   step re-runs it and re-dates this record.
 
+## Addendum — 2026-08-11: the engine's name is resolved
+
+The rename this record demanded has a name. **The compute engine becomes SCHWEEP.**
+
+**The sweep that chose it** (conducted on the engine's track; candidates and outcomes returned to
+this record):
+
+| Candidate | Outcome |
+| --- | --- |
+| **Weft** | **Rejected.** `WeaveMindAI/weft` — "a programming language for AI orchestrations", Rust, 1,824 stars — is an active project in an adjacent category with real mindshare, and `weft` is taken on npm. The bare word fails for the same reason bare "Mutiny" does: someone is already standing on it, in this audience. |
+| Heddle · Artesian · Seiche · Millrace · Freshet · Weir · Oxbow | Occupied. |
+| **Schweep** | **Chosen.** Clean on crates.io, npm and GitHub. |
+
+**Independently confirmed here, 2026-08-11**, against this record's own rule that an availability
+finding is only as good as its date:
+
+| Surface | Result |
+| --- | --- |
+| crates.io `schweep`, `schweep-core` | free — and unlike `current`, the bare name *and* the prefix are both available |
+| npm `schweep` · PyPI `schweep` | free |
+| GitHub org/user `schweep` | free |
+| GitHub repo search, `schweep` in name | 5 results, **all 0 stars**, all unrelated hobby repositories (`BenDobbe/Schweep`, `Kerol4/Schweeps`, and three supermarket/minesweeper toys). Recorded as found rather than rounded to "zero": the name is unclaimed, not unheard-of. |
+| schweep.dev · schweep.io | no A record, no NS record — no evidence of registration |
+| schweep.com | **registered** (resolves; GoDaddy nameservers) — do not plan on it |
+
+Schweep clears every criterion this record set for the replacement: not a dictionary word, free as
+both the bare crate name and the `schweep-*` prefix, nothing in data infrastructure using it, and
+searchable — the first page of results will be the project itself. The class-9/42 registered-mark
+question is unchanged in kind and still belongs to the professional clearance search that Rule 4
+makes a prerequisite of M8; Schweep goes into that search alongside MutinyDB.
+
+**When it takes effect.** The rename executes on the engine's own track as its **D-21**, after its
+current sprint lands. MD-1 R4 keeps that out of this repository's hands, correctly, and nothing here
+anticipates it: the engine is still named Current until D-21 lands, and the trigger MD-2 now names
+(`schweep-v0.1` at the engine's C13 freeze) is a tag that does not yet exist.
+
+**Why this repository's own references are not being rewritten today.** Deliberate deferral, not an
+oversight. Every "Current" in MD-1, MD-2, MD-3 and the README still names a real engine under its
+real present name, and rewriting them now would (a) churn four documents against a rename that has
+not landed, (b) leave this repository describing an engine whose repository, crates and architecture
+document still say Current, and (c) have to be redone anyway if D-21 slips or the name moves again.
+The sweep is recorded; the churn happens **once, at M1 open**, against the renamed engine — and M1's
+session inherits it as a first task rather than discovering it.
+
 ## Sources
 
 Registry, DNS and GitHub results were obtained directly from the crates.io, npm, PyPI and GitHub
@@ -192,3 +236,10 @@ APIs and from `dig`/`whois` on the sweep date. Trademark and product-landscape f
 - [Current (financial services company)](https://en.wikipedia.org/wiki/Current_(financial_services_company))
 - [Current 2026 — Confluent](https://current.confluent.io/) ·
   [The Future of Current](https://www.confluent.io/blog/future-of-current-data-streaming-community/)
+
+Addendum (2026-08-11):
+
+- [WeaveMindAI/weft — a programming language for AI orchestrations](https://github.com/WeaveMindAI/weft)
+  (1,824 stars, Rust, at time of check)
+- Schweep availability was checked directly against the crates.io, npm, PyPI and GitHub APIs and
+  `dig`, on the addendum date.
