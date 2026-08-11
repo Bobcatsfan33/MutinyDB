@@ -1,7 +1,11 @@
 # MD-2 · The Delta Bridge contract
 
 **Status:** Accepted
-**Phase:** M0 (contract) · **Built at:** M1 (`mutiny-bridge`), needs Current **C4**
+**Phase:** M0 (contract) · **Built at:** M1 (`mutiny-bridge`)
+**M1 trigger:** the engine tags **`schweep-v0.1`** at its **C13** freeze. Not C4, and not a sprint.
+C4's gate is already green on the engine's track; what M1 needs is a *release* it can pin, because
+§6 admits siblings by tag only — never by branch, never by fork, never by path (MD-1 R3). The engine
+is renamed to SCHWEEP by its own D-21 (MD-4 addendum); until that tag exists, M1 does not open.
 **Roadmap:** `CONSOLIDATION-ROADMAP.md` §3 K-1, §4 M1
 **Depends on:** MD-1 R1 (`compute → bridge → storage`), MD-1 R3 (siblings by pinned tag)
 
@@ -236,7 +240,8 @@ stays true.
 ### What this asks of Current, on Current's own track
 
 Recorded here because MD-1 R4 forbids MutinyDB from reaching into Current, and an unrecorded
-dependency is a surprise waiting for M1:
+dependency is a surprise waiting for M1. **All three have been scheduled on the engine's track; the
+dispositions are in Consequences below, and they are what M1 inherits.**
 
 1. **C4 as shipped is sufficient for R1–R4, R6–R8.** `append` + `seal_epoch` + content-addressed
    dedup already give exactly-once and the epoch boundary; `Batch.source_id` already exists.
@@ -259,6 +264,22 @@ makes that provable: after a crash, the bridge re-offers the same tokens and Cur
 replays.
 
 ## Consequences
+
+### Disposition of the three asks (returned from the engine's track, 2026-08-11)
+
+M1's session inherits these as settled facts and does not need to re-ask.
+
+| Ask | Disposition | What M1 may assume |
+| --- | --- | --- |
+| **1 · C4 as shipped satisfies R1–R4, R6–R8** | **Needs nothing.** Confirmed: `append` + `seal_epoch` + content-addressed dedup are sufficient as they stand. | Build against C4's API as it exists at the `schweep-v0.1` tag. No engine change is pending for the core seam. |
+| **2 · C11's optional `predicate` parameter** | **Hard requirement at the C11 kickoff.** No longer a hope this record expressed; it is scoped into the sprint that builds source-scoped retraction. | `retract_source(source_id, predicate?)` with a key-set predicate will exist. C3's multi-source taint path is safe to design against, and the MD-2-is-amended contingency is retired unless C11 reports otherwise. |
+| **3 · Transactional multi-append-then-seal** | **Considered at C9, stays optional.** | Do **not** wait for it and do not design around it. R1 is satisfied today by N × `append` followed by `seal_epoch`, which is sound because R8 makes the bridge the only writer and therefore the only sealer. If C9 delivers it, adopting it is a simplification of the bridge, not a correctness fix. |
+
+The shape of that table is the point: one ask needed nothing, one became a requirement on the
+engine's own sprint, and one stays optional with the fallback already proven adequate. None of them
+became a change this repository asks a sibling to make on MutinyDB's behalf (§6, MD-1 R3).
+
+### The rest
 
 - **The write path grows a second relation.** Every payload delta carries its derivation edges,
   with fan-out equal to `derived_from.len()`. For observation-heavy tenants this is small; for

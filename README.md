@@ -16,10 +16,15 @@ their exit gates. Read it before anything here.
 | MD-1…MD-4 merged | [MD-1](docs/decisions/MD-1.md) planes and dependency rules · [MD-2](docs/decisions/MD-2.md) the Delta Bridge contract · [MD-3](docs/decisions/MD-3.md) the unified SQL surface · [MD-4](docs/decisions/MD-4.md) the naming sweep |
 | CI skeleton (fmt / clippy `-D warnings` / test / no-egress) green | `.github/workflows/ci.yml` |
 
-**M1 has not started, and cannot.** It needs Current's C4 gate consumed *by pinned tag* (§6), and
-Current carries no tags. Nothing in this repository builds a bridge, an operator, or a mounted
-plane; the workspace holds one crate, `mutiny-charter`, which contains no engine code — it is the M0
-gate expressed as a test.
+**M1 has not started, and cannot.** Its trigger is the engine tagging **`schweep-v0.1`** at its C13
+freeze — a *release* to pin, not a sprint to finish (§6 admits siblings by tag only; MD-2 states the
+trigger, MD-4's addendum the rename). Nothing in this repository builds a bridge, an operator, or a
+mounted plane; the workspace holds one crate, `mutiny-charter`, which contains no engine code — it
+is the M0 gate expressed as a test.
+
+The engine is still named **Current** until its own D-21 lands. This repository's references to it
+are rewritten **once, at M1 open**, against the renamed engine — a deliberate deferral, recorded in
+MD-4's addendum, and M1's first task.
 
 Loom v0.3 and Prism S12 continue on their own roadmaps, unchanged. Nothing here pauses them, and
 nothing in any sibling repository may depend on this one (§6, MD-1 R4).
