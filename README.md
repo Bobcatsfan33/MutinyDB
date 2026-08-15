@@ -28,7 +28,7 @@ fleet operation, external assurance, and production approval remain open.
 | --- | --- | --- | --- |
 | substrate | storage | `substrate-v1.6.0` | quarantined pending compatibility |
 | LoomDB | trust, branches, provenance, policy, action gateway | `loomdb-v0.5.1` | quarantined pending mounted-oracle gates |
-| PrismDB | semantic event parts, generations, exact/approximate search | unreleased snapshot `296e804` | blocked on a release and composed oracle |
+| PrismDB | semantic event parts, generations, exact/approximate search | unreleased snapshot `84e5a4f`; version contract and AWS KMS provider merged | blocked on a release, live AWS KMS receipt, and composed release gates |
 | Schweep | incremental circuits, epochs, standing answers | exact unreleased snapshot `220bf6b`; C11–C13 implementation complete | blocked on the remaining scheduled-night evidence, `current-v0.1`, and composed release admission |
 
 This distinction is enforced, not editorial. `scripts/verify_component_lock.py` recomputes the
