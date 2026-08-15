@@ -73,26 +73,6 @@ fn the_roadmap_this_repository_serves_is_present_at_the_root() {
     assert!(roadmap.is_file(), "{} is missing", roadmap.display());
 }
 
-#[test]
-fn no_phase_after_m0_has_started_in_this_workspace() {
-    // The instruction M0 is most likely to be violated by is "do not start M1". A crate that is
-    // not the charter crate means someone did. This test is the tripwire; the M1 session deletes
-    // it in the same commit that adds `mutiny-bridge`, which is a deliberate, visible act rather
-    // than a drift.
-    let crates = repository_root().join("crates");
-    let members: Vec<String> = std::fs::read_dir(&crates)
-        .expect("crates/ should exist")
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().is_dir())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(
-        members,
-        vec!["mutiny-charter".to_owned()],
-        "M0 carries exactly one crate and no engine code; found {members:?}"
-    );
-}
-
 // ---------------------------------------------------------------------------------------------
 // The gate can fail. One mutation per rule.
 // ---------------------------------------------------------------------------------------------

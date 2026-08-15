@@ -748,6 +748,139 @@ overlap, so the report presents both the query view and a dataflow total that co
 That distinction is part of the contract; summing the query rows would turn sharing into fictitious
 work.
 
+### D-27 · Source retraction is a durable, same-source negative transaction
+
+*Sprint: C11. Recorded before the source index, snapshot format, or endpoint was changed.*
+
+**The decision.** Every acknowledged input batch already carries `source_id`. Compaction now writes a
+checksummed `PROVENANCE` ledger beside the Parquet table integrals and dedup ledger. The ledger holds the
+consolidated net contribution for each `(source_id, table)` at the snapshot epoch; retained log batches
+extend it. A source retraction negates the selected part of that net contribution and appends those
+negative batches through the normal ingest/seal path **under the same `source_id`**.
+
+That last clause is the idempotency rule. Once the retraction seals, the source's selected net
+contribution is zero, so repeating the request generates no delta and no new epoch. It also means a
+partial retraction composes: retracting predicate A and later predicate B removes exactly what remains in
+each set, including their overlap only once. The operation is not a privileged mutation of operator
+state, a log rewrite, or a snapshot edit; all standing queries, joins, aggregates, shared nodes,
+subscriptions, checkpoints, and recovery observe an ordinary epoch.
+
+**Predicate contract.** No predicate means all tables and rows. A predicate is scoped to one table and
+is parsed and bound by the existing SQL scalar-expression implementation; only rows for which it
+evaluates `TRUE` are retracted. `FALSE` and `NULL` do not match, exactly as `WHERE` (S-17). There is no
+second expression evaluator for recalls to drift from SQL.
+
+**Format compatibility.** New snapshots are `current snapshot v2` and authenticate `PROVENANCE` in the
+manifest. A v1 snapshot remains readable for query recovery, but source retraction is refused after a v1
+prefix has been discarded because the missing attribution cannot be reconstructed honestly. Recompact
+from an uncompacted log before enabling C11 on such data; never guess ownership from surviving rows.
+
+**Atomicity and retry.** The generated batches share one epoch. Existing exactly-once tokens are derived
+from the source, target epoch, table, and canonical retraction contents. If a crash interrupts appends,
+retry drops acknowledged batches and completes the same epoch through I-4's ordinary recovery path.
+
+### D-28 · The accelerator verdict is pre-registered and evidence-bound
+
+*Sprint: C12. Criteria recorded before the spike implementation or measurements exist.*
+
+**Question being decided.** Does one fused GPU filter-plus-aggregate kernel justify a later, separately
+designed accelerator phase for the one-shot cold path? C12 does not add a GPU production path, dependency,
+feature flag, or public API. It produces a disposable spike, a reproducible evidence artifact, and either
+`GO` or `NO-GO`. CPU remains the only shipped execution path regardless of the verdict.
+
+**Workload and measurement contract.** The candidate computes the same `Int64` filter-plus-sum over the
+same deterministic Arrow value buffers as the current C10 CPU one-shot implementation, at exactly
+100,000, 1,000,000, and 10,000,000 rows. Eleven paired, alternating release rounds follow one untimed
+warm-up. GPU samples include input-buffer creation/copy, command encoding, submission, completion, and
+the final reduction of bounded partials. Reusable device, compiled-pipeline, and command-queue creation is
+reported separately and excluded from each sample, just as process/toolchain startup is excluded from the
+C10 paired benchmark. Every result must equal the CPU result exactly.
+
+**Pre-registered `GO` rule.** All of the following must hold; one miss is `NO-GO`:
+
+1. exact result equality in the warm-up and all 66 measured executions (two implementations × three
+   sizes × eleven rounds);
+2. GPU/CPU median speedup of at least `2.00x` at both 1,000,000 and 10,000,000 rows;
+3. break-even no later than 1,000,000 rows (GPU median no slower than CPU median there);
+4. no failed or discarded measured round, and the artifact publishes every raw paired sample, full range,
+   machine, OS, compiler, device, workload definition, and inclusion/exclusion boundary;
+5. the spike builds and runs from the committed script using only the checked-in source, the pinned Rust
+   dependency graph, and the host platform SDK. An unavailable device or toolchain is evidence for
+   `NO-GO`, not permission to substitute a simulation.
+
+A `GO` authorizes design work only. Production acceptance would still require a portable capability
+boundary, CPU parity for every supported semantic case, memory-admission controls, fault fallback,
+differential tests, and independent Linux/NVIDIA or other target evidence. A `NO-GO` keeps D-8's CPU-first
+decision in force and removes the spike from the release build surface.
+
+**Verdict: `GO` for a later design phase; CPU remains the only production path.** The committed Apple M2
+run satisfied all pre-registered criteria. Median GPU speedup was 56.76x at 100,000 rows, 89.85x at
+1,000,000 rows, and 85.98x at 10,000,000 rows; break-even was therefore at or below the smallest measured
+size. Three warm-up pairs and all 66 measured candidate executions agreed exactly. The GPU samples include
+the buffer copy, allocation, command work, synchronization, and final host reduction. They exclude the
+reported 74.90 ms one-time runtime shader/pipeline setup. `testing/evidence/c12-accelerator.json` contains
+every raw sample and `c12_evidence` recomputes its medians and verdict threshold.
+
+The magnitude is evidence of opportunity, not a production performance claim: the CPU side is Schweep's
+general incremental circuit used as a one-shot, while the spike is specialized to one fused integer
+filter/sum. The experiment therefore identifies the cold-path specialization opportunity it was designed
+to find. It does not establish the production requirements listed above, and no Metal source is linked by
+or distributed in a production binary.
+
+### D-29 · HTTP is the frozen v0.1 transport; Flight remains an evaluated extension
+
+*Sprint: C13. Supersedes D-23's deadline to decide Flight in C13; preserves D-6, I-6, and I-10.*
+
+**Decision.** v0.1 freezes the tested HTTP contract in `docs/current-api.md`; it does not add Arrow
+Flight. Flight remains tracked in [issue #13](https://github.com/Bobcatsfan33/schweep/issues/13), behind
+three acceptance requirements: a workload that benefits from columnar transport, proof that its door
+compiles to the identical plan and execution counters, and a dependency/runtime security review.
+
+The reason is not that Flight has no value. It can remove row/frame translation at a future columnar
+boundary and supplies a standard ecosystem protocol. The reason is that C13 found no committed workload
+showing transport to be the current bottleneck, while adding `tonic`, `prost`, an async runtime, HTTP/2,
+and generated protocol code would create a second server lifecycle and a materially larger dependency
+surface immediately before an API freeze. The existing HTTP door already runs the full differential
+harness over a real socket, has a client implementation, and survives the kill/subscriber matrices.
+
+Adding an unproven transport to satisfy an architecture noun would weaken the hardening sprint. The
+architecture's `Arrow Flight + HTTP` line is therefore a direction, not a v0.1 claim. HTTP framing may be
+replaced or supplemented in v0.2, but the operations, error taxonomy, epoch tokens, and one-execution-door
+proof remain the compatibility boundary.
+
+### D-30 · v0.1 freezes a named supported surface, not every public Rust item
+
+*Sprint: C13. Preserves I-1 through I-10 and turns the API freeze into a reviewable contract.*
+
+`docs/current-api.md` is the complete compatibility promise. The supported deployment is the `schweepd`
+binary; the supported embedded surface is the explicitly named engine, client, plan, one-shot, and Z-set
+entry points. Other `pub` items exist so workspace crates and evidence tests can compose, but the crates
+remain `publish = false` and those internals are not silently frozen.
+
+Patch releases in the `0.1.x` line are backward-compatible at the named HTTP, semantic, subscription,
+wire, and durable-format boundaries. Breaking them requires v0.2 and migration notes. Snapshot v1 and v2
+remain readable; new compactions write v2. This is narrow enough to keep and explicit enough for an
+operator to test before upgrading.
+
+The architecture's historical release tag `current-v0.1` remains the tag of record and points to package
+version `0.1.0`. It is intentionally not created by this decision: D-31 makes the evidence gate, not a
+human's desire to finish, authorize that tag.
+
+### D-31 · the release tag fails closed on seven qualifying calendar nights
+
+*Sprint: C13. Preserves I-10 and the C13 exit gate.*
+
+A qualifying night is one scheduled CI workflow where both `nightly crash gate (SyncPolicy::Full)` and
+`nightly soak (schweepd under load)` succeed. A green workflow that did not contain both jobs does not
+qualify. `testing/evidence/c13-nightly-streak.json` records each run and its individual job conclusions;
+`scripts/verify_c13_release.py` rejects the tag unless seven qualifying dates exist and the artifact is
+explicitly complete. The release workflow runs that verifier before tests, build, packaging, checksum,
+provenance capture, or publication.
+
+As of 2026-08-15, GitHub contains five successful scheduled workflow days but only four have both required
+nightly jobs. The release is therefore blocked. This is an expected passage-of-time gate, not permission
+to synthesize three runs or count a manually dispatched rerun as another night.
+
 ---
 
 ## Open questions

@@ -1,24 +1,22 @@
 # MutinyDB — the workspace.
 #
-# It carries no admitted engine crate until M1. Exact, quarantined source imports live under
-# `components/` from the M0 reset onward; MD-6 and components.lock.json keep source presence
-# separate from product admission.
+# Exact, quarantined source imports live under `components/`; MD-6 and components.lock.json keep
+# development linkage separate from release admission. M1's bridge is the first composed crate,
+# while no supported product binary may include a component whose release admission is blocked.
 #
 # CONSOLIDATION-ROADMAP.md §4 M0 says the exit gate is "CI skeleton (fmt/clippy/test/no-egress)
 # green on an empty workspace" — the seam is wired before the code arrives, so M1's first commit
 # inherits a gate that is already red-if-broken rather than one written to fit whatever it built.
-# M0 writes decision records and imports exact source trees: no bridge code (M1), no operators
-# (M2), no mounted planes (M3), and no product dependency on a quarantined component.
+# M0 wrote the decision records and exact imports. M1 now adds the bridge and composed gates;
+# there are still no semantic operators (M2), mounted planes (M3), or product binary (M6).
 #
 # `members` is not literally empty, because a literally empty virtual workspace is not something
 # cargo can act on: `cargo fmt --all` exits 1 with "Failed to find targets", and clippy and test
 # both refuse with "the manifest is virtual, and the workspace has no members". A CI skeleton whose
 # four jobs all error out is not a green gate, and a skeleton whose jobs are skipped or `|| true`'d
 # into passing is worse — it is a gate that reports success while measuring nothing, which is the
-# exact failure mode I-10 exists to prevent. So the workspace holds exactly one member,
-# `mutiny-charter`, which contains no engine code of any kind: it is the M0 exit gate expressed as
-# a test (the decision records are present, well-formed, and accepted), and it gives fmt, clippy
-# and test something real to be green *about*.
+# exact failure mode I-10 exists to prevent. `mutiny-charter` remains that M0 proof; M1 adds
+# `mutiny-bridge` without weakening it.
 #
 # What this file is allowed to grow, and when:
 #   M1  crates/mutiny-bridge         substrate commit stream -> Schweep epoch inputs (MD-2)
@@ -28,15 +26,26 @@
 # Nothing may be added ahead of its phase. (§6: "no phase starts before its named gates".)
 [workspace]
 resolver = "3"
-members = ["crates/mutiny-charter"]
+members = ["crates/mutiny-charter", "crates/mutiny-bridge"]
+exclude = [
+    "components/loomdb",
+    "components/prismdb",
+    "components/schweep",
+    "components/substrate",
+]
 
-# MD-6 replaces the sibling/tag topology with workspace-local component source. This section is
-# still empty because M0 admits no component. M1 adds only paths inside this repository after the
-# corresponding release and composed gates remove the component's lock blockers.
+# MD-6 replaces the sibling/tag topology with workspace-local component source. These paths enable
+# composed development and testing; they do not change the component lock's release-admission state.
 [workspace.dependencies]
+blake3 = "1.5"
+loom-core = { path = "components/loomdb/crates/loom-core" }
+schweep-log = { path = "components/schweep/crates/schweep-log" }
+schweep-zset = { path = "components/schweep/crates/schweep-zset" }
+substrate-pager = { path = "components/substrate/crates/substrate-pager" }
+thiserror = "2"
 
-# The lints M1's crates inherit with `[lints] workspace = true`. They are stated here, in the
-# phase that has no code, because a lint added after the code exists is a lint that gets
+# The lints M1's crates inherit with `[lints] workspace = true`. They were stated before code,
+# because a lint added after the code exists is a lint that gets
 # `#[allow]`d instead of obeyed. Schweep's D-1 discipline, adopted verbatim: no unsafe, and no
 # panicking constructs in library code.
 [workspace.lints.rust]

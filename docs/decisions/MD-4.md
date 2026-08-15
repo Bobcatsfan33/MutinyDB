@@ -206,7 +206,7 @@ makes a prerequisite of M8; Schweep goes into that search alongside MutinyDB.
 **When it takes effect.** The rename executes on the engine's own track as its **D-21**, after its
 current sprint lands. MD-1 R4 keeps that out of this repository's hands, correctly, and nothing here
 anticipates it: the engine is still named Current until D-21 lands, and the trigger MD-2 now names
-(`schweep-v0.1` at the engine's C13 freeze) is a tag that does not yet exist.
+(`current-v0.1` at the engine's C13 freeze) is a tag that does not yet exist.
 
 **Why this repository's own references are not being rewritten today.** Deliberate deferral, not an
 oversight. Every "Current" in MD-1, MD-2, MD-3 and the README still names a real engine under its

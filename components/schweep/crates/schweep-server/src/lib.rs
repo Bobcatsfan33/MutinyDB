@@ -63,7 +63,9 @@ pub mod wire;
 
 pub use admission::{Policy, DEFAULT_SOURCE_QUEUE_BOUND, DEFAULT_SOURCE_QUEUE_BYTES};
 pub use client::{Client, RawResponse, Response};
-pub use engine::{Drained, Engine, EpochDelta, SUBSCRIPTION_RING, SUBSCRIPTION_RING_BYTES};
+pub use engine::{
+    Drained, Engine, EpochDelta, RetractionReceipt, SUBSCRIPTION_RING, SUBSCRIPTION_RING_BYTES,
+};
 pub use error::{ServerError, ServerResult};
 pub use registry_file::Registry;
 pub use server::{Server, ServerConfig};

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-08-15",
+  "required_consecutive_nights": 7,
+  "observed_scheduled_workflow_days": 5,
+  "observed_complete_soak_nights": 4,
+  "status": "pending",
+  "release_blocked": true,
+  "definition": "A qualifying night is one scheduled CI workflow in which both nightly crash gate (SyncPolicy::Full) and nightly soak (schweepd under load) conclude success. Workflow success alone is not enough.",
+  "runs": [
+    {
+      "date": "2026-08-11",
+      "run_id": 31459339874,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31459339874",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "not_present",
+      "qualifies": false
+    },
+    {
+      "date": "2026-08-12",
+      "run_id": 31565505912,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31565505912",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-13",
+      "run_id": 31669438682,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31669438682",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-14",
+      "run_id": 31772030249,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31772030249",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-15",
+      "run_id": 31863129117,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31863129117",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    }
+  ]
+}

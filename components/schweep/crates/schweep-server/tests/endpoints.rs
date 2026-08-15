@@ -71,6 +71,59 @@ fn the_endpoints_round_trip() {
     );
 }
 
+/// C11's public door: a predicate uses WHERE semantics and a completed retry is a no-op.
+#[test]
+fn source_retraction_is_predicate_scoped_and_idempotent_over_the_wire() {
+    let h = Harness::fresh("source-retraction");
+    let handle: u64 = h
+        .client
+        .register(SUM)
+        .unwrap()
+        .body()
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+
+    h.client
+        .ingest("poisoned", "t", "p1", &[(row(1, 10), 2), (row(2, 4), 1)])
+        .unwrap();
+    h.client
+        .ingest("trusted", "t", "g1", &[(row(1, 3), 1)])
+        .unwrap();
+    h.client.seal().unwrap();
+
+    let receipt = h
+        .client
+        .retract_source("poisoned", Some("t"), Some("t.n >= 10"))
+        .unwrap();
+    let body = receipt.body().unwrap();
+    assert!(body.starts_with("retracted\nepoch 2\n"), "{body}");
+    assert!(body.contains("rows 1\n"), "{body}");
+    assert!(body.contains("multiplicity 2\n"), "{body}");
+    assert_eq!(
+        h.client.answer(handle).unwrap().unwrap(),
+        "(k: Int64, s: Int64)\n(1, 3) => 1\n(2, 4) => 1\n"
+    );
+
+    let retry = h
+        .client
+        .retract_source("poisoned", Some("t"), Some("t.n >= 10"))
+        .unwrap();
+    assert_eq!(
+        retry.body().unwrap(),
+        "no-op\ntables 0\nrows 0\nmultiplicity 0\n"
+    );
+    assert_eq!(h.client.epoch_of(handle).unwrap(), Some(2));
+
+    let rest = h.client.retract_source("poisoned", None, None).unwrap();
+    assert!(rest.body().unwrap().starts_with("retracted\nepoch 3\n"));
+    assert_eq!(
+        h.client.answer(handle).unwrap().unwrap(),
+        "(k: Int64, s: Int64)\n(1, 3) => 1\n"
+    );
+}
+
 /// **The error taxonomy, over the wire.** Every kind, reached by a real request (D-23).
 #[test]
 fn every_error_kind_is_reachable_and_only_one_is_retryable() {

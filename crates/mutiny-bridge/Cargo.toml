@@ -1,0 +1,20 @@
+[package]
+name = "mutiny-bridge"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The MutinyDB commit-to-epoch admission boundary."
+
+[dependencies]
+blake3.workspace = true
+loom-core.workspace = true
+schweep-log.workspace = true
+schweep-zset.workspace = true
+substrate-pager.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

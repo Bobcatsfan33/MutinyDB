@@ -368,6 +368,12 @@ impl Log {
         self.snapshot.as_deref()
     }
 
+    /// The schema catalog used to validate every append.
+    #[must_use]
+    pub fn catalog(&self) -> &BTreeMap<String, Schema> {
+        &self.catalog
+    }
+
     /// The dedup ledger this log would write into a snapshot (compaction's P2).
     #[must_use]
     pub fn dedup_ledger(&self) -> Vec<u8> {

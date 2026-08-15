@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-08-15T20:41:13Z",
+  "source": {
+    "repository": "Bobcatsfan33/schweep",
+    "workflow_run_id": 31906947809,
+    "job_id": 95066177776,
+    "event": "workflow_dispatch",
+    "head_sha": "5de862dd71d26c23cf45f37af463efd25a10635f",
+    "workflow_conclusion": "success",
+    "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31906947809"
+  },
+  "differential": {
+    "seeds": 44000,
+    "claimed_scenarios": 44000,
+    "epochs": 204321,
+    "comparisons": 248321,
+    "matching_error_answers": 2101,
+    "divergences": 0,
+    "conclusion": "success"
+  },
+  "crash_recovery": {
+    "cycles": 100000,
+    "seeds": 100000,
+    "seam_faults_fired": 47109,
+    "byte_boundary_faults": 18711,
+    "clean_runs": 6254,
+    "recovered_by_bootstrap": 14769,
+    "named_seams_fired": 26,
+    "named_seams_total": 26,
+    "conclusion": "success"
+  },
+  "nightly_streak_credit": false,
+  "nightly_streak_note": "This was a manual workflow dispatch. It proves the extended populations and does not count as a scheduled calendar night."
+}
+

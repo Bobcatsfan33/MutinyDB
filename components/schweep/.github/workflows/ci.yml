@@ -1,7 +1,7 @@
 name: CI
 
-# Four jobs, all of which must be green for a sprint to be done (ARCHITECTURE.md §6 C0):
-# fmt, clippy -D warnings, test, and a job that proves the suite needs no network.
+# Required jobs must be green for a sprint to be done. In addition to the C0 formatting, lint, test,
+# and no-network baseline, later sprints add fixed-memory ceilings and one named job per invariant.
 #
 # "Green locally" is not done. Green here is done.
 
@@ -78,6 +78,10 @@ jobs:
         run: cargo test -p schweep-server --locked --test kill9 -- --nocapture --test-threads=1
       - name: The C9 subscriber-crash gate (kill the subscriber, resume by token)
         run: cargo test -p schweep-server --locked --test subscriber_crash -- --nocapture
+      - name: The C11 source-retraction gate (lineage, compaction, shared plans, oracle)
+        run: cargo test -p schweep-differential --locked --test c11_source_retraction -- --nocapture
+      - name: The C12 accelerator evidence gate (raw samples, verdict, production boundary)
+        run: cargo test -p schweep-bench --locked --test c12_evidence -- --nocapture
 
   no-network:
     name: no-network
@@ -243,6 +247,66 @@ jobs:
             --setenv=TMPDIR="$RUNNER_TEMP" \
             "$binary" --nocapture --test-threads=1
 
+  invariants:
+    name: invariant ${{ matrix.invariant }} · ${{ matrix.claim }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - invariant: I-1
+            claim: oracle equality
+            command: cargo test -p schweep-differential --locked --test c1_engine_vs_oracle engine_vs_oracle_over_a_thousand_filter_project_scenarios
+          - invariant: I-2
+            claim: deterministic replay
+            command: cargo test -p schweep-differential --locked --test reproducibility
+          - invariant: I-3
+            claim: epoch atomicity
+            command: cargo test -p schweep-server --locked --test endpoints
+          - invariant: I-4
+            claim: exactly-once ingest
+            command: cargo test -p schweep-log --locked --test dedup
+          - invariant: I-5
+            claim: retraction symmetry
+            command: cargo test -p schweep-zset --locked --test properties && cargo test -p schweep-differential --locked --test c11_source_retraction predicate_retraction_matches_where_and_does_not_advance_on_retry -- --exact
+          - invariant: I-6
+            claim: one execution door
+            command: cargo test -p schweep-differential --locked --test c5_sql_door i6_
+          - invariant: I-7
+            claim: crash equals replay
+            command: cargo test -p schweep-crash --locked --test c4_crash_gate a_torn_checkpoint
+          - invariant: I-8
+            claim: memo transparency
+            command: cargo test -p schweep-differential --locked --test c6_memo i8_
+          - invariant: I-9
+            claim: declared bounded state
+            command: cargo test -p schweep-circuit --locked --test circuit accounting
+          - invariant: I-10
+            claim: evidence and zero flakes
+            command: cargo test -p schweep-differential --locked --test evidence && cargo test -p schweep-bench --locked --test c10_evidence && cargo test -p schweep-bench --locked --test c12_evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Prove ${{ matrix.invariant }} · ${{ matrix.claim }}
+        run: ${{ matrix.command }}
+
+  c13-extended:
+    name: C13 extended differential and crash populations (10x)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 44,000-seed engine-versus-oracle differential sweep
+        run: cargo test -p schweep-differential --locked --test c13_extended -- --ignored --nocapture
+      - name: 100,000-cycle crash-and-recover sweep
+        env:
+          SCHWEEP_CRASH_CYCLES: "100000"
+        run: cargo test -p schweep-crash --locked --test c4_crash_gate ten_thousand_crash_and_recover_cycles -- --nocapture
+
   # The C9 soak: a full window of server load, on a schedule.
   #
   # Nightly rather than per-push because it is minutes of wall clock and its instrument is a per-epoch
@@ -269,7 +333,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, test, no-network, state-ceiling, memo-ceiling]
+    needs: [fmt, clippy, test, no-network, state-ceiling, memo-ceiling, invariants]
     if: always()
     steps:
       - name: Fail if any job did not succeed

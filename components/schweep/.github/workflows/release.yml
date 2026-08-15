@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "current-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: verify, package, and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Enforce the C13 evidence and tag contract
+        run: python3 scripts/verify_c13_release.py
+      - name: Re-run the frozen workspace gate
+        run: cargo test --workspace --all-features --locked
+      - name: Build supported binaries
+        run: cargo build --release --locked -p schweep-server --bin schweepd --bin schweep-subscriber
+      - name: Package binaries, compatibility contract, and build provenance
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          package="schweep-${RELEASE_TAG}-x86_64-unknown-linux-gnu"
+          mkdir "$package"
+          cp target/release/schweepd target/release/schweep-subscriber "$package/"
+          cp LICENSE README.md docs/current-api.md "$package/"
+          cargo metadata --locked --format-version 1 > "$package/cargo-metadata.json"
+          rustc -vV > "$package/rustc.txt"
+          git rev-parse HEAD > "$package/source-commit.txt"
+          tar -czf "$package.tar.gz" "$package"
+          sha256sum "$package.tar.gz" > "$package.tar.gz.sha256"
+          echo "ASSET=$package.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            "$ASSET" "$ASSET.sha256" \
+            --repo "${{ github.repository }}" \
+            --verify-tag \
+            --title "Schweep ${{ github.ref_name }}" \
+            --notes "Frozen v0.1 engine release. Supported surface and compatibility promise: docs/current-api.md."

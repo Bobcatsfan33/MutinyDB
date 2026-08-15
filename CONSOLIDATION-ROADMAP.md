@@ -17,7 +17,7 @@
 
 ---
 
-## §1 — Where the inputs stand now (rebased 2026-08-14)
+## §1 — Where the inputs stand now (rebased 2026-08-15)
 
 [`components.lock.json`](components.lock.json) is the machine-readable source of truth; this
 paragraph explains its product meaning.
@@ -32,13 +32,15 @@ paragraph explains its product meaning.
 - **PrismDB** — snapshot `296e804` is imported exactly. The semantic engine, authenticated service,
   encryption, backup/hydration, and shard distribution are substantial, but no release tag exists;
   multi-host scaling, production key custody, S15–S17, and external assurance remain open.
-- **Schweep** — snapshot `c4b6268` is imported exactly. C0–C10 are complete: server compaction,
-  bounded operations, hot loops, four performance benchmarks, 10,000-query sharing evidence, and
-  `EXPLAIN MAINTENANCE` are gated. C11–C13 and `schweep-v0.1` do not exist yet.
+- **Schweep** — snapshot `220bf6b` is imported exactly. C0–C13 implementation is complete,
+  including predicate-scoped source retraction, the accelerator evidence protocol, frozen API,
+  invariant jobs, and extended hosted evidence. Release admission remains blocked: the
+  `current-v0.1` contract requires seven qualifying scheduled nights and currently records four.
 
 Implication for sequencing: source consolidation is complete before product admission begins.
-Schweep remains the critical path. M1 opens only on its C13 release and the root compatibility gate;
-Prism and Loom are admitted only at their composed phase gates, not because their source is present.
+M1 development is running against the exact merged C13 tree so the composed gate can be built;
+Schweep remains quarantined from a product release until `current-v0.1` exists. Prism and Loom are
+admitted only at their composed phase gates, not because their source is present.
 
 ## §2 — What MutinyDB is
 
@@ -215,8 +217,9 @@ After final import they become archived or read-only mirrors. Supported product 
 only here.
 
 Workspace-local paths are permitted; paths outside this repository, submodules, moving branches,
-and unrecorded copies are forbidden. Presence is not admission: no product crate may link a
-quarantined component, and each M-phase removes blockers only through its named composed oracle.
+and unrecorded copies are forbidden. Presence and composed-development linkage are not admission:
+integration crates may link an exact quarantined tree to run its named oracle, but no supported
+binary or release artifact may include it until the lock records zero blockers.
 
 ---
 

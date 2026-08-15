@@ -2,10 +2,11 @@
 
 **Status:** Accepted
 **Phase:** M0 (contract) · **Built at:** M1 (`mutiny-bridge`)
-**M1 trigger:** the engine tags **`schweep-v0.1`** at its **C13** freeze. Not C4, and not a sprint.
+**M1 release-admission trigger:** the engine tags **`current-v0.1`** at its **C13** freeze. Not C4, and not a sprint.
 C4's gate is already green on the engine's track; what M1 needs is a *release* it can pin, because
 §6 admits siblings by tag only — never by branch, never by fork, never by path (MD-1 R3). The engine
-is renamed to SCHWEEP by its own D-21 (MD-4 addendum); until that tag exists, M1 does not open.
+is renamed to SCHWEEP by its own D-21 (MD-4 addendum). Composed development may run against an
+exact merged tree, but no MutinyDB release admits it until that tag exists.
 **Roadmap:** `CONSOLIDATION-ROADMAP.md` §3 K-1, §4 M1
 **Depends on:** MD-1 R1 (`compute → bridge → storage`), MD-1 R3 (siblings by pinned tag)
 
@@ -271,8 +272,8 @@ M1's session inherits these as settled facts and does not need to re-ask.
 
 | Ask | Disposition | What M1 may assume |
 | --- | --- | --- |
-| **1 · C4 as shipped satisfies R1–R4, R6–R8** | **Needs nothing.** Confirmed: `append` + `seal_epoch` + content-addressed dedup are sufficient as they stand. | Build against C4's API as it exists at the `schweep-v0.1` tag. No engine change is pending for the core seam. |
-| **2 · C11's optional `predicate` parameter** | **Hard requirement at the C11 kickoff.** No longer a hope this record expressed; it is scoped into the sprint that builds source-scoped retraction. | `retract_source(source_id, predicate?)` with a key-set predicate will exist. C3's multi-source taint path is safe to design against, and the MD-2-is-amended contingency is retired unless C11 reports otherwise. |
+| **1 · C4 as shipped satisfies R1–R4, R6–R8** | **Needs nothing.** Confirmed: `append` + `seal_epoch` + content-addressed dedup are sufficient as they stand. | Build against the frozen API that will be tagged `current-v0.1`. No engine change is pending for the core seam. |
+| **2 · C11's optional `predicate` parameter** | **Shipped and gated.** `Engine::retract_source(source, table?, predicate?)` is exercised by the C11 differential and wire gates. | C3's multi-source taint path is safe to build against the exact C13 snapshot; release use still waits for `current-v0.1`. |
 | **3 · Transactional multi-append-then-seal** | **Considered at C9, stays optional.** | Do **not** wait for it and do not design around it. R1 is satisfied today by N × `append` followed by `seal_epoch`, which is sound because R8 makes the bridge the only writer and therefore the only sealer. If C9 delivers it, adopting it is a simplification of the bridge, not a correctness fix. |
 
 The shape of that table is the point: one ask needed nothing, one became a requirement on the

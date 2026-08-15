@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "invariants": [
+    {"id": "I-1", "claim": "oracle equality", "ci_job": "invariant I-1"},
+    {"id": "I-2", "claim": "deterministic replay", "ci_job": "invariant I-2"},
+    {"id": "I-3", "claim": "epoch atomicity", "ci_job": "invariant I-3"},
+    {"id": "I-4", "claim": "exactly-once ingest", "ci_job": "invariant I-4"},
+    {"id": "I-5", "claim": "retraction symmetry", "ci_job": "invariant I-5"},
+    {"id": "I-6", "claim": "one execution door", "ci_job": "invariant I-6"},
+    {"id": "I-7", "claim": "crash equals replay", "ci_job": "invariant I-7"},
+    {"id": "I-8", "claim": "memo transparency", "ci_job": "invariant I-8"},
+    {"id": "I-9", "claim": "declared bounded state", "ci_job": "invariant I-9"},
+    {"id": "I-10", "claim": "evidence and zero flakes", "ci_job": "invariant I-10"}
+  ]
+}

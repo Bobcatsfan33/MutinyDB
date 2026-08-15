@@ -36,6 +36,8 @@ pub struct Compacted {
     pub rows: BTreeMap<String, usize>,
     /// Tokens carried across the swap in the dedup ledger. **The number that keeps I-4 true.**
     pub tokens: usize,
+    /// Source identities carried into the authenticated provenance ledger (C11).
+    pub sources: usize,
 }
 
 /// The snapshot directory for an epoch.
@@ -75,6 +77,10 @@ pub fn compact(
         )));
     }
 
+    // Resolve attribution while the old snapshot + log prefix are still authoritative. It is written
+    // and fsynced before P7 can discard either half (D-27).
+    let provenance = crate::source::source_integrals_upto(log, log.catalog(), anchor)?;
+
     let published = snapshot_dir(&root, anchor);
     let partial = root.join(format!("snap-{anchor:010}.partial"));
     // A leftover `.partial` from an earlier crashed attempt is not a state to reason about; it is
@@ -95,6 +101,8 @@ pub fn compact(
     let ledger = log.dedup_ledger();
     let tokens = schweep_log::dedup::decode(&ledger)?.len();
     fs::write(partial.join(schweep_log::log::DEDUP_LEDGER), &ledger)?;
+    let provenance_crc =
+        snapshot::write_provenance(&partial.join(snapshot::PROVENANCE), &provenance)?;
 
     if faults.reached(Seam::CompactAfterWriteBeforeFsync) {
         // A `.partial` with possibly-torn Parquet. Ignored and deleted; the whole log is authoritative.
@@ -124,6 +132,7 @@ pub fn compact(
         epoch: anchor,
         tables: checksums,
         dedup_crc: schweep_log::record::crc32(&ledger),
+        provenance_crc: Some(provenance_crc),
     };
     {
         let path = partial.join(snapshot::MANIFEST);
@@ -173,6 +182,7 @@ pub fn compact(
         snapshot: published,
         rows,
         tokens,
+        sources: provenance.len(),
     })
 }
 

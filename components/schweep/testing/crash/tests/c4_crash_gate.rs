@@ -37,6 +37,13 @@ fn scenario_for(seed: u64) -> Option<Scenario> {
     Some(scenario)
 }
 
+fn crash_cycles() -> u64 {
+    std::env::var("SCHWEEP_CRASH_CYCLES")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(10_000)
+}
+
 /// **The gate.** 10,000 randomized crash-and-recover cycles.
 ///
 /// Each cycle: generate a scenario from a seed, run it cleanly to get the twin, then run it again
@@ -44,7 +51,7 @@ fn scenario_for(seed: u64) -> Option<Scenario> {
 /// the **answer** — I-7's byte-identical claim, checkable only because of I-2.
 #[test]
 fn ten_thousand_crash_and_recover_cycles() {
-    const CYCLES: u64 = 10_000;
+    let target_cycles = crash_cycles();
 
     let mut cycles = 0u64;
     let mut faults_fired = 0u64;
@@ -55,7 +62,7 @@ fn ten_thousand_crash_and_recover_cycles() {
     let mut seams_planned: BTreeSet<&'static str> = BTreeSet::new();
 
     let mut seed = 0u64;
-    while cycles < CYCLES {
+    while cycles < target_cycles {
         seed += 1;
         let Some(scenario) = scenario_for(seed) else {
             continue;
@@ -140,18 +147,18 @@ fn ten_thousand_crash_and_recover_cycles() {
         Seam::all().len()
     );
 
-    assert_eq!(cycles, CYCLES);
+    assert_eq!(cycles, target_cycles);
 
     // **The fault count is asserted.** A crash suite that injects no faults passes trivially. C3
     // learned this from a mutation that silently failed to apply; the same discipline applies here.
     assert!(
-        faults_fired > CYCLES / 4,
+        faults_fired > target_cycles / 4,
         "only {faults_fired} of {cycles} cycles actually fired a seam fault; a crash gate that \
          injects nothing proves nothing"
     );
     assert!(
-        byte_faults > 100,
-        "only {byte_faults} byte-boundary faults were selected"
+        byte_faults > target_cycles / 100,
+        "only {byte_faults} byte-boundary faults were selected in {target_cycles} cycles"
     );
 
     // Every seam that was *planned* must have *fired* at least once. A seam that is planned but never

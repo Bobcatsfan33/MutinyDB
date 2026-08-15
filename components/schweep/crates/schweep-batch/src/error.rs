@@ -28,6 +28,12 @@ pub enum BatchError {
     #[error("no table named {table:?} in the catalog this snapshot was written against")]
     UnknownTable { table: String },
 
+    #[error(
+        "source provenance is unavailable for the compacted prefix through epoch {epoch}; this is a \
+         snapshot-v1 database and ownership cannot be reconstructed after its log records were removed"
+    )]
+    ProvenanceUnavailable { epoch: u64 },
+
     #[error("compaction needs a published checkpoint to anchor to; there is none (P1)")]
     NoCheckpointToAnchorTo,
 
