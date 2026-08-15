@@ -19,7 +19,13 @@ ALLOWED_COMPONENT_EDGES = {
         "substrate-pager",
         "substrate-wal",
     },
-    "mutiny-semantic": {"prism-engine", "prism-part", "prism-quantizer", "prism-types"},
+    "mutiny-semantic": {
+        "prism-engine",
+        "prism-part",
+        "prism-quantizer",
+        "prism-types",
+        "schweep-zset",
+    },
 }
 COMPONENT_ROOT = ROOT / "components"
 

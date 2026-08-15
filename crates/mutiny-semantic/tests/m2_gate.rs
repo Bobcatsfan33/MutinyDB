@@ -1,12 +1,16 @@
 #![allow(clippy::panic, clippy::unwrap_used)]
 
 use mutiny_semantic::{
-    ScalarColumns, ScalarPredicate, SemanticDelta, SemanticError, SemanticQuery, SemanticRecord,
-    SemanticTopK,
+    route_exact, BridgeColumns, BridgeEmbeddingPlan, GenerationMigration, MigrationPhase,
+    OneShotAnswer, OneShotSemanticSource, QueryRoute, ScalarColumns, ScalarPredicate,
+    SemanticDelta, SemanticError, SemanticGroupPlan, SemanticGroups, SemanticHit, SemanticQuery,
+    SemanticRecord, SemanticTopK,
 };
 use prism_types::vector::dot;
 use prism_types::{Attributes, Embedder, Event, HashEmbedder, Query};
+use schweep_zset::{Row, Value};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 fn columns(tenant: &str, event_time: i64, cost: f64, error: bool) -> ScalarColumns {
     ScalarColumns {
@@ -324,4 +328,451 @@ fn maintained_hybrid_answer_equals_prismdbs_real_exact_search() {
         assert_eq!(actual.key, expected.event.event_id);
         assert_eq!(actual.score.to_bits(), expected.score.to_bits());
     }
+}
+
+#[test]
+fn bridge_embedding_is_generation_pinned_scoped_and_epoch_atomic() {
+    let embedder = HashEmbedder::with_version(16, "7");
+    let plan = BridgeEmbeddingPlan::new(
+        "events",
+        BridgeColumns {
+            key: 0,
+            body: 1,
+            tenant: 2,
+            event_time: 3,
+            cost_micros: 4,
+            error: 5,
+        },
+        &embedder,
+    )
+    .unwrap();
+    let good = Row::new(vec![
+        Value::Str("event-1".to_owned()),
+        Value::Str("database security incident".to_owned()),
+        Value::Str("acme".to_owned()),
+        Value::Int(42),
+        Value::Int(1_250_000),
+        Value::Bool(true),
+    ]);
+    let malformed = Row::new(vec![
+        Value::Str("event-2".to_owned()),
+        Value::Str("bad row".to_owned()),
+        Value::Str("acme".to_owned()),
+        Value::Str("not-a-time".to_owned()),
+        Value::Int(0),
+        Value::Bool(false),
+    ]);
+    let embedded = plan.embed_entries(&[(good.clone(), 1)], &embedder).unwrap();
+    assert_eq!(embedded[0].record.space, "hash-embedder:7");
+    assert_eq!(embedded[0].record.columns.cost, 1.25);
+    assert!(plan
+        .embed_entries(&[(good, 1), (malformed, 1)], &embedder)
+        .is_err());
+
+    let wrong_generation = HashEmbedder::with_version(16, "8");
+    assert!(matches!(
+        plan.embed_entries(&[], &wrong_generation),
+        Err(SemanticError::SpaceMismatch { .. })
+    ));
+}
+
+#[test]
+fn semantic_groups_are_incremental_bounded_and_exactly_mergeable() {
+    let plan = SemanticGroupPlan::new(
+        "model:v1",
+        vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        ScalarPredicate {
+            tenant: Some("acme".to_owned()),
+            ..ScalarPredicate::default()
+        },
+    )
+    .unwrap();
+    let rows = [
+        record(
+            "a",
+            "model:v1",
+            vec![1.0, 0.1],
+            columns("acme", 1, 10.0, false),
+        ),
+        record(
+            "b",
+            "model:v1",
+            vec![0.9, 0.2],
+            columns("acme", 2, 20.0, true),
+        ),
+        record(
+            "c",
+            "model:v1",
+            vec![0.1, 1.0],
+            columns("acme", 3, 30.0, false),
+        ),
+        record(
+            "filtered",
+            "model:v1",
+            vec![0.0, 1.0],
+            columns("other", 4, 100.0, true),
+        ),
+    ];
+    let mut whole = SemanticGroups::new(plan.clone());
+    whole
+        .apply_epoch(
+            rows.iter()
+                .cloned()
+                .map(|record| SemanticDelta { record, weight: 1 }),
+        )
+        .unwrap();
+    let mut left = SemanticGroups::new(plan.clone());
+    let mut right = SemanticGroups::new(plan);
+    left.apply_epoch(
+        rows[..2]
+            .iter()
+            .cloned()
+            .map(|record| SemanticDelta { record, weight: 1 }),
+    )
+    .unwrap();
+    right
+        .apply_epoch(
+            rows[2..]
+                .iter()
+                .cloned()
+                .map(|record| SemanticDelta { record, weight: 1 }),
+        )
+        .unwrap();
+    left.merge_disjoint(&right).unwrap();
+    assert_eq!(left.summaries(), whole.summaries());
+    assert_eq!(whole.summaries()[0].member_keys, vec!["a", "b"]);
+    assert_eq!(whole.summaries()[0].avg_cost, 15.0);
+    assert_eq!(whole.summaries()[0].error_rate, 0.5);
+
+    whole
+        .apply_epoch([SemanticDelta {
+            record: rows[1].clone(),
+            weight: -1,
+        }])
+        .unwrap();
+    assert_eq!(whole.summaries()[0].member_keys, vec!["a"]);
+}
+
+#[test]
+fn dual_generation_migration_never_compares_scores_and_fails_closed_on_parity() {
+    let predicate = ScalarPredicate::default();
+    let primary = SemanticTopK::new(
+        SemanticQuery::new("migrate", "model:v1", vec![1.0, 0.0], 2, predicate.clone()).unwrap(),
+    );
+    let candidate = SemanticTopK::new(
+        SemanticQuery::new("migrate", "model:v2", vec![0.0, 1.0], 2, predicate).unwrap(),
+    );
+    let mut migration = GenerationMigration::new(primary, candidate).unwrap();
+    let old = [
+        record(
+            "a",
+            "model:v1",
+            vec![1.0, 0.0],
+            columns("acme", 1, 1.0, false),
+        ),
+        record(
+            "b",
+            "model:v1",
+            vec![0.0, 1.0],
+            columns("acme", 1, 1.0, false),
+        ),
+    ];
+    let new = [
+        record(
+            "a",
+            "model:v2",
+            vec![1.0, 0.0],
+            columns("acme", 1, 1.0, false),
+        ),
+        record(
+            "b",
+            "model:v2",
+            vec![0.0, 1.0],
+            columns("acme", 1, 1.0, false),
+        ),
+    ];
+    migration
+        .apply_epoch(
+            old.iter()
+                .cloned()
+                .map(|record| SemanticDelta { record, weight: 1 }),
+            new.iter()
+                .cloned()
+                .map(|record| SemanticDelta { record, weight: 1 }),
+        )
+        .unwrap();
+    assert_eq!(migration.answer()[0].key, "a");
+    assert_eq!(migration.candidate_answer()[0].key, "b");
+    assert!(matches!(
+        migration.cut_over(0),
+        Err(SemanticError::MigrationParity { .. })
+    ));
+    assert_eq!(migration.phase(), MigrationPhase::Mirroring);
+    migration.cut_over(2).unwrap();
+    assert_eq!(migration.phase(), MigrationPhase::CutOver);
+    assert_eq!(migration.answer()[0].key, "b");
+}
+
+struct PrismOneShot<'a> {
+    engine: &'a prism_engine::Engine,
+    query: Query,
+    space: String,
+}
+
+impl OneShotSemanticSource for PrismOneShot<'_> {
+    fn exact(&self, _query: &SemanticQuery) -> Result<OneShotAnswer, String> {
+        self.engine
+            .search(&self.query)
+            .map(|result| OneShotAnswer {
+                space: self.space.clone(),
+                hits: result
+                    .hits
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, hit)| SemanticHit {
+                        key: hit.event.event_id,
+                        rank: index + 1,
+                        score: hit.score,
+                    })
+                    .collect(),
+            })
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[test]
+fn cold_one_shot_route_uses_prisms_real_rerank_path_and_equals_hot_state() {
+    let root = tempfile::tempdir().unwrap();
+    let dim = 16;
+    let engine = prism_engine::Engine::init(
+        root.path(),
+        prism_part::store::StoreConfig {
+            format_version: prism_part::store::STORE_VERSION,
+            dim,
+            nlist: 4,
+            pq_m: 4,
+            seed: 42,
+            kmeans_restarts: prism_quantizer::kmeans::KMEANS_RESTARTS,
+            block_size: prism_part::format::DEFAULT_BLOCK_SIZE,
+            partitions: Default::default(),
+            promote: Vec::new(),
+        },
+    )
+    .unwrap();
+    let embedder = HashEmbedder::with_version(dim, "1");
+    let events = (0..64)
+        .map(|id| Event {
+            event_id: format!("cold-{id:03}"),
+            tenant_id: "acme".to_owned(),
+            event_time: id,
+            observed_time: 100,
+            event_name: "event".to_owned(),
+            cost: id as f64,
+            error: id % 9 == 0,
+            body: format!(
+                "{} database security event {id}",
+                if id % 5 == 0 { "urgent" } else { "routine" }
+            ),
+            trace_id: String::new(),
+            span_id: String::new(),
+            attributes: Attributes::new(),
+            idempotency_key: None,
+        })
+        .collect::<Vec<_>>();
+    engine.ingest(events.clone(), 100).unwrap();
+    let text = "urgent database security event";
+    let semantic_query = SemanticQuery::new(
+        "cold-route",
+        "hash-embedder:1",
+        embedder.embed(text).unwrap(),
+        8,
+        ScalarPredicate::default(),
+    )
+    .unwrap();
+    let mut standing = SemanticTopK::new(semantic_query);
+    standing
+        .apply_epoch(events.iter().map(|event| SemanticDelta {
+            record: record(
+                &event.event_id,
+                "hash-embedder:1",
+                embedder.embed(&event.body).unwrap(),
+                columns(&event.tenant_id, event.event_time, event.cost, event.error),
+            ),
+            weight: 1,
+        }))
+        .unwrap();
+    let prism_query = Query {
+        text: text.to_owned(),
+        tenant: Some("acme".to_owned()),
+        k: 8,
+        nprobe: 4,
+        candidates: 64,
+        rerank: 64,
+        ..Query::default()
+    };
+    let source = PrismOneShot {
+        engine: &engine,
+        query: prism_query,
+        space: "hash-embedder:1".to_owned(),
+    };
+    let hot = route_exact(&standing, usize::MAX, &source).unwrap();
+    let cold = route_exact(&standing, 1, &source).unwrap();
+    assert_eq!(hot.route, QueryRoute::Incremental);
+    assert_eq!(cold.route, QueryRoute::ColdOneShot);
+    assert_eq!(hot.hits, cold.hits);
+}
+
+struct FrozenSource {
+    space: String,
+    hits: Vec<SemanticHit>,
+}
+
+impl OneShotSemanticSource for FrozenSource {
+    fn exact(&self, _query: &SemanticQuery) -> Result<OneShotAnswer, String> {
+        Ok(OneShotAnswer {
+            space: self.space.clone(),
+            hits: self.hits.clone(),
+        })
+    }
+}
+
+#[test]
+fn frozen_hybrid_corpus_covers_bridge_group_migration_and_route_contracts() {
+    let rows = include_str!("fixtures/m2-golden.tsv")
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .map(|line| {
+            let fields = line.split('|').collect::<Vec<_>>();
+            Row::new(vec![
+                Value::Str(fields[0].to_owned()),
+                Value::Str(fields[1].to_owned()),
+                Value::Str(fields[2].to_owned()),
+                Value::Int(fields[3].parse().unwrap()),
+                Value::Int(fields[4].parse().unwrap()),
+                Value::Bool(fields[5].parse().unwrap()),
+            ])
+        })
+        .map(|row| (row, 1))
+        .collect::<Vec<_>>();
+    let v1 = HashEmbedder::with_version(16, "golden-v1");
+    let v2 = HashEmbedder::with_version(16, "golden-v2");
+    let columns = BridgeColumns {
+        key: 0,
+        body: 1,
+        tenant: 2,
+        event_time: 3,
+        cost_micros: 4,
+        error: 5,
+    };
+    let old = BridgeEmbeddingPlan::new("events", columns.clone(), &v1)
+        .unwrap()
+        .embed_entries(&rows, &v1)
+        .unwrap();
+    let new = BridgeEmbeddingPlan::new("events", columns, &v2)
+        .unwrap()
+        .embed_entries(&rows, &v2)
+        .unwrap();
+    let predicate = ScalarPredicate {
+        tenant: Some("acme".to_owned()),
+        min_cost: Some(5.0),
+        ..ScalarPredicate::default()
+    };
+    let query_text = "urgent database security";
+    let primary = SemanticTopK::new(
+        SemanticQuery::new(
+            "golden",
+            "hash-embedder:golden-v1",
+            v1.embed(query_text).unwrap(),
+            4,
+            predicate.clone(),
+        )
+        .unwrap(),
+    );
+    let candidate = SemanticTopK::new(
+        SemanticQuery::new(
+            "golden",
+            "hash-embedder:golden-v2",
+            v2.embed(query_text).unwrap(),
+            4,
+            predicate.clone(),
+        )
+        .unwrap(),
+    );
+    let mut migration = GenerationMigration::new(primary, candidate).unwrap();
+    migration.apply_epoch(old.clone(), new.clone()).unwrap();
+    migration.cut_over(0).unwrap();
+
+    let group_plan = SemanticGroupPlan::new(
+        "hash-embedder:golden-v1",
+        vec![
+            v1.embed("database operations").unwrap(),
+            v1.embed("identity security").unwrap(),
+        ],
+        predicate,
+    )
+    .unwrap();
+    let mut groups = SemanticGroups::new(group_plan);
+    groups.apply_epoch(old).unwrap();
+
+    let candidate_hits = migration.answer();
+    let source = FrozenSource {
+        space: "hash-embedder:golden-v2".to_owned(),
+        hits: candidate_hits.clone(),
+    };
+    let mut route_state = SemanticTopK::new(migration_query(&v2));
+    route_state.apply_epoch(new).unwrap();
+    let cold = route_exact(&route_state, 1, &source).unwrap();
+    assert_eq!(cold.route, QueryRoute::ColdOneShot);
+    assert_eq!(cold.hits, candidate_hits);
+
+    let mut canonical = String::new();
+    for hit in candidate_hits {
+        writeln!(
+            canonical,
+            "hit|{}|{}|{:08x}",
+            hit.rank,
+            hit.key,
+            hit.score.to_bits()
+        )
+        .unwrap();
+    }
+    for group in groups.summaries() {
+        writeln!(
+            canonical,
+            "group|{}|{}|{:.6}|{:.6}|{}|{}",
+            group.group_id,
+            group.count,
+            group.avg_cost,
+            group.error_rate,
+            group.exemplar_key,
+            group.member_keys.join(",")
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        canonical,
+        concat!(
+            "hit|1|evt-001|3f1e246c\n",
+            "hit|2|evt-008|3f1e246c\n",
+            "hit|3|evt-006|3f13f298\n",
+            "hit|4|evt-003|3f017245\n",
+            "group|0|3|10.666667|0.666667|evt-008|evt-001,evt-004,evt-008\n",
+            "group|1|2|9.000000|1.000000|evt-006|evt-003,evt-006\n",
+        )
+    );
+}
+
+fn migration_query(embedder: &HashEmbedder) -> SemanticQuery {
+    SemanticQuery::new(
+        "golden",
+        "hash-embedder:golden-v2",
+        embedder.embed("urgent database security").unwrap(),
+        4,
+        ScalarPredicate {
+            tenant: Some("acme".to_owned()),
+            min_cost: Some(5.0),
+            ..ScalarPredicate::default()
+        },
+    )
+    .unwrap()
 }

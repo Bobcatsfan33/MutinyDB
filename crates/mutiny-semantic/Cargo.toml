@@ -6,7 +6,9 @@ publish = false
 description = "Generation-pinned bounded incremental semantic operators for MutinyDB."
 
 [dependencies]
+mutiny-bridge = { path = "../mutiny-bridge" }
 prism-types.workspace = true
+schweep-zset.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
