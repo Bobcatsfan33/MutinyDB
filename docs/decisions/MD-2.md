@@ -296,9 +296,13 @@ became a change this repository asks a sibling to make on MutinyDB's behalf (§6
   assignment is not a choice — it is the commit sequence. Downstream of a sealed epoch, MutinyDB is
   a pure function of the tenant's WAL, which is what makes both the oracle and crash recovery
   meaningful across the composed system.
-- **Open, and deliberately not decided here.** (a) The canonical `row_key` encoding for
+- **Open, and deliberately not decided here.** The canonical `row_key` encoding for
   `mutiny_derivation` — it must be stable across schema versions, and that is a schema-evolution
-  question that belongs with the catalog work in M2, not with the bridge. (b) Whether the write-set
-  capture lives in a substrate-side transaction hook or a Loom-side write interceptor; both satisfy
-  A2, the choice is an M1 implementation detail, and the audit in R5 keeps either honest.
-  (c) Cross-tenant queries have no epoch clock and are out of scope until the fleet plane exists.
+  question that belongs with the catalog work in M2, not with the bridge. Cross-tenant queries have
+  no epoch clock and are out of scope until the fleet plane exists.
+- **The capture placement is resolved at M1.** It is a bounded record on reserved substrate logical
+  page `u64::MAX`, written by `commit_with_capture` inside the same transaction as the application
+  pages. The function consumes the transaction immediately after reconciling its staged page keys
+  against the logical capture. Manifest history is therefore the durable queue across the gap
+  between storage commit and compute seal; no Loom-side interceptor or mutable side checkpoint can
+  lose that gap.

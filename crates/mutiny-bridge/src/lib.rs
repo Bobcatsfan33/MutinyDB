@@ -2,14 +2,29 @@
 //! epoch. The bridge owns the epoch clock and is deliberately the only product crate allowed to
 //! append to the compute log.
 
-use loom_core::{BranchId, SourceRef, TenantId, WriteEnvelope};
+use bincode::Options as _;
+use loom_core::{
+    ActorId, BranchId, PolicyDecisionId, SessionId, SourceRef, TenantId, WriteEnvelope,
+};
 use schweep_log::{Ack, Batch, FaultInjector, Log};
-use schweep_zset::{Row, Value};
+use schweep_zset::{DataType, Field, Row, Schema, Value};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use substrate_pager::{LogicalPageNo, Manifest, ManifestId};
+use substrate_pager::{LogicalPageNo, Manifest, ManifestId, PageStore, PagerError, Txn};
+use substrate_wal::{DurableStore, WalError};
 
 /// The table that makes provenance an ordinary maintained relation.
 pub const DERIVATION_TABLE: &str = "mutiny_derivation";
+
+/// The substrate logical page reserved for the durable bridge outbox.
+///
+/// Every MutinyDB write goes through [`commit_with_capture`], so application schemas can never
+/// allocate this page. Each manifest keeps its own content-addressed version, making the capture
+/// recoverable as-of the exact commit even after later writes replace the head's version.
+pub const CAPTURE_PAGE: LogicalPageNo = LogicalPageNo::MAX;
+
+const CAPTURE_MAGIC: [u8; 8] = *b"MTNYCAP1";
+const MAX_CAPTURE_BYTES: u64 = 1024 * 1024;
 
 /// A stable reference to the canonical bytes of a Loom write envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -56,6 +71,17 @@ pub struct CapturedChange {
 pub struct CapturedTable {
     /// Deterministically sorted by the bridge before admission.
     pub changes: Vec<CapturedChange>,
+}
+
+/// A logical write set before substrate assigns its content-addressed manifest id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitDraft {
+    pub tenant: TenantId,
+    pub plane: String,
+    pub commit_seq: u64,
+    pub branch: BranchId,
+    pub envelope: WriteEnvelope,
+    pub tables: BTreeMap<String, CapturedTable>,
 }
 
 /// The atomic handoff from the storage writer to the compute plane.
@@ -144,8 +170,130 @@ pub enum BridgeError {
     ReplayCompacted { epoch: u64 },
     #[error("the compute log has a pending batch that does not belong to commit {commit}")]
     ForeignPendingBatch { commit: String },
+    #[error("logical page {page} is reserved for MutinyDB's durable capture outbox")]
+    CapturePageReserved { page: LogicalPageNo },
+    #[error("the durable capture could not be encoded: {reason}")]
+    CaptureEncode { reason: String },
+    #[error("the compute catalog is incompatible with M1 admission: {reason}")]
+    CatalogMismatch { reason: String },
+    #[error("the durable capture at commit {commit} is missing or malformed: {reason}")]
+    CaptureDecode { commit: String, reason: String },
+    #[error("substrate refused the captured commit: {reason}")]
+    Storage { reason: String },
     #[error(transparent)]
     Log(#[from] schweep_log::LogError),
+}
+
+/// Commit the application pages and their complete logical capture in one substrate transaction.
+///
+/// This function consumes `txn` immediately after writing the reserved outbox page. No caller can
+/// add an unaccounted write between capture and commit. A crash after substrate's commit point but
+/// before [`apply_commit`] is recovered with [`recover_capture`].
+pub fn commit_with_capture(
+    store: &DurableStore,
+    mut txn: Txn,
+    draft: &CommitDraft,
+    catalog: &BTreeMap<String, Schema>,
+    authority: &impl EnvelopeAuthority,
+) -> Result<CommitCapture, BridgeError> {
+    if txn.writes().contains_key(&CAPTURE_PAGE) {
+        return Err(BridgeError::CapturePageReserved { page: CAPTURE_PAGE });
+    }
+    validate_draft(draft, authority)?;
+    validate_draft_against_catalog(draft, catalog)?;
+    validate_parent_sequence(store, txn.base(), draft.commit_seq)?;
+    let explained = explained_pages(&draft.tables)?;
+    let physical = txn.writes().keys().copied().collect::<BTreeSet<_>>();
+    audit_pages(&physical, &explained)?;
+
+    let bytes = encode_draft(draft)?;
+    store
+        .write(&mut txn, CAPTURE_PAGE, bytes)
+        .map_err(|error| BridgeError::Storage {
+            reason: error.to_string(),
+        })?;
+    let physical_pages = txn.writes().keys().copied().collect();
+    let commit = store.commit(txn).map_err(|error| BridgeError::Storage {
+        reason: error.to_string(),
+    })?;
+    materialize_capture(store, commit, draft.clone(), physical_pages)
+}
+
+/// The fixed M1 provenance-relation schema. Catalog creation and recovery use the same function so
+/// a column reorder cannot make a storage commit permanently unbridgeable.
+pub fn derivation_schema() -> Result<Schema, BridgeError> {
+    Schema::new_table(vec![
+        Field::not_null("tenant", DataType::Utf8),
+        Field::not_null("branch", DataType::Utf8),
+        Field::not_null("table_name", DataType::Utf8),
+        Field::not_null("row_key", DataType::Utf8),
+        Field::not_null("source_system", DataType::Utf8),
+        Field::not_null("source_record", DataType::Utf8),
+        Field::not_null("envelope", DataType::Utf8),
+    ])
+    .map_err(schweep_log::LogError::ZSet)
+    .map_err(BridgeError::from)
+}
+
+/// Reconstruct the exact logical capture stored inside `commit`'s substrate manifest.
+pub fn recover_capture(
+    store: &DurableStore,
+    commit: ManifestId,
+) -> Result<CommitCapture, BridgeError> {
+    let page = store
+        .read(&commit, CAPTURE_PAGE)
+        .map_err(|error| BridgeError::CaptureDecode {
+            commit: commit.to_hex(),
+            reason: error.to_string(),
+        })?;
+    let draft = decode_draft(page.as_bytes()).map_err(|reason| BridgeError::CaptureDecode {
+        commit: commit.to_hex(),
+        reason,
+    })?;
+    let mut physical_pages = explained_pages(&draft.tables)?;
+    physical_pages.insert(CAPTURE_PAGE);
+    materialize_capture(store, commit, draft, physical_pages)
+}
+
+/// Recover every storage commit newer than the compute plane's sealed epoch, oldest first.
+///
+/// The manifest history is the durable queue. There is no second mutable checkpoint that can
+/// disagree with it: callers apply this returned vector in order and Schweep's own sealed epoch is
+/// the consumer offset.
+pub fn recover_pending_captures(
+    store: &DurableStore,
+    head: ManifestId,
+    sealed_epoch: u64,
+) -> Result<Vec<CommitCapture>, BridgeError> {
+    let mut current = head;
+    let mut pending = Vec::new();
+    loop {
+        let manifest = store
+            .pager()
+            .manifest(&current)
+            .map_err(|error| BridgeError::Storage {
+                reason: error.to_string(),
+            })?;
+        let Some(parent) = manifest.parent else {
+            break;
+        };
+        let capture = recover_capture(store, current)?;
+        if capture.commit_seq <= sealed_epoch {
+            break;
+        }
+        pending.push(capture);
+        current = parent;
+    }
+    pending.reverse();
+    for (expected, capture) in (sealed_epoch + 1..).zip(&pending) {
+        if capture.commit_seq != expected {
+            return Err(BridgeError::SequenceGap {
+                expected,
+                found: capture.commit_seq,
+            });
+        }
+    }
+    Ok(pending)
 }
 
 /// Prepare and atomically advance the commit-to-epoch boundary.
@@ -343,13 +491,14 @@ fn prepare(
         );
     }
 
-    let unexplained = capture
-        .physical_pages
+    let mut application_pages = capture.physical_pages.clone();
+    application_pages.remove(&CAPTURE_PAGE);
+    let unexplained = application_pages
         .difference(&explained)
         .copied()
         .collect::<Vec<_>>();
     let phantom = explained
-        .difference(&capture.physical_pages)
+        .difference(&application_pages)
         .copied()
         .collect::<Vec<_>>();
     if !unexplained.is_empty() || !phantom.is_empty() {
@@ -410,6 +559,373 @@ fn validate_identifier(field: &'static str, value: &str) -> Result<(), BridgeErr
         return Err(BridgeError::InvalidIdentifier { field });
     }
     Ok(())
+}
+
+fn validate_draft(
+    draft: &CommitDraft,
+    authority: &impl EnvelopeAuthority,
+) -> Result<(), BridgeError> {
+    validate_identifier("tenant", draft.tenant.as_str())?;
+    validate_identifier("plane", &draft.plane)?;
+    validate_identifier("branch", draft.branch.as_str())?;
+    if draft.commit_seq == 0 {
+        return Err(BridgeError::ZeroSequence);
+    }
+    if !draft.envelope.is_valid() {
+        return Err(BridgeError::InvalidEnvelope);
+    }
+    if draft.envelope.branch != draft.branch {
+        return Err(BridgeError::BranchMismatch {
+            envelope: draft.envelope.branch.as_str().to_owned(),
+            commit: draft.branch.as_str().to_owned(),
+        });
+    }
+    if draft.tables.is_empty() {
+        return Err(BridgeError::EmptyCommit {
+            commit: "not-yet-assigned".to_owned(),
+        });
+    }
+    for (table, captured) in &draft.tables {
+        validate_identifier("table", table)?;
+        if table == DERIVATION_TABLE {
+            return Err(BridgeError::InvalidIdentifier { field: "table" });
+        }
+        if captured.changes.is_empty() {
+            return Err(BridgeError::EmptyTable {
+                table: table.clone(),
+            });
+        }
+        if captured.changes.iter().any(|change| change.weight == 0) {
+            return Err(BridgeError::ZeroWeight {
+                table: table.clone(),
+            });
+        }
+    }
+    let envelope = EnvelopeId::of(&draft.envelope);
+    authority
+        .admit(envelope, &draft.envelope)
+        .map_err(|reason| BridgeError::EnvelopeRefused {
+            id: envelope.to_hex(),
+            reason,
+        })
+}
+
+fn validate_parent_sequence(
+    store: &DurableStore,
+    parent: ManifestId,
+    found: u64,
+) -> Result<(), BridgeError> {
+    match store.read(&parent, CAPTURE_PAGE) {
+        Ok(page) => {
+            let prior =
+                decode_draft(page.as_bytes()).map_err(|reason| BridgeError::CaptureDecode {
+                    commit: parent.to_hex(),
+                    reason,
+                })?;
+            let expected = prior.commit_seq + 1;
+            if found != expected {
+                return Err(BridgeError::SequenceGap { expected, found });
+            }
+            Ok(())
+        }
+        Err(WalError::Pager(PagerError::PageNotFound { .. })) if found == 1 => Ok(()),
+        Err(WalError::Pager(PagerError::PageNotFound { .. })) => {
+            Err(BridgeError::SequenceGap { expected: 1, found })
+        }
+        Err(error) => Err(BridgeError::Storage {
+            reason: error.to_string(),
+        }),
+    }
+}
+
+fn validate_draft_against_catalog(
+    draft: &CommitDraft,
+    catalog: &BTreeMap<String, Schema>,
+) -> Result<(), BridgeError> {
+    let declared_derivation = catalog
+        .get(DERIVATION_TABLE)
+        .ok_or_else(|| schweep_log::LogError::UnknownTable(DERIVATION_TABLE.to_owned()))?;
+    if declared_derivation != &derivation_schema()? {
+        return Err(BridgeError::CatalogMismatch {
+            reason: format!("catalog schema for {DERIVATION_TABLE:?} is not the fixed M1 schema"),
+        });
+    }
+    for (table, captured) in &draft.tables {
+        let schema = catalog
+            .get(table)
+            .ok_or_else(|| schweep_log::LogError::UnknownTable(table.clone()))?;
+        for change in &captured.changes {
+            if change.row.len() != schema.len() {
+                return Err(
+                    schweep_log::LogError::ZSet(schweep_zset::ZSetError::ArityMismatch {
+                        expected: schema.len(),
+                        found: change.row.len(),
+                    })
+                    .into(),
+                );
+            }
+            for (index, value) in change.row.values().iter().enumerate() {
+                schema
+                    .check_value(index, value)
+                    .map_err(schweep_log::LogError::ZSet)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn explained_pages(
+    tables: &BTreeMap<String, CapturedTable>,
+) -> Result<BTreeSet<LogicalPageNo>, BridgeError> {
+    let mut pages = BTreeSet::new();
+    for (table, captured) in tables {
+        if captured.changes.is_empty() {
+            return Err(BridgeError::EmptyTable {
+                table: table.clone(),
+            });
+        }
+        for change in &captured.changes {
+            pages.extend(change.pages.iter().copied());
+        }
+    }
+    Ok(pages)
+}
+
+fn audit_pages(
+    physical: &BTreeSet<LogicalPageNo>,
+    explained: &BTreeSet<LogicalPageNo>,
+) -> Result<(), BridgeError> {
+    let unexplained = physical.difference(explained).copied().collect::<Vec<_>>();
+    let phantom = explained.difference(physical).copied().collect::<Vec<_>>();
+    if unexplained.is_empty() && phantom.is_empty() {
+        Ok(())
+    } else {
+        Err(BridgeError::AuditMismatch {
+            unexplained,
+            phantom,
+        })
+    }
+}
+
+fn materialize_capture(
+    store: &DurableStore,
+    commit: ManifestId,
+    draft: CommitDraft,
+    physical_pages: BTreeSet<LogicalPageNo>,
+) -> Result<CommitCapture, BridgeError> {
+    let manifest = store
+        .pager()
+        .manifest(&commit)
+        .map_err(|error| BridgeError::Storage {
+            reason: error.to_string(),
+        })?;
+    Ok(CommitCapture {
+        tenant: draft.tenant,
+        plane: draft.plane,
+        commit,
+        commit_seq: draft.commit_seq,
+        manifest,
+        branch: draft.branch,
+        envelope: draft.envelope,
+        physical_pages,
+        tables: draft.tables,
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CaptureWire {
+    magic: [u8; 8],
+    tenant: String,
+    plane: String,
+    commit_seq: u64,
+    branch: String,
+    envelope: EnvelopeWire,
+    tables: BTreeMap<String, TableWire>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EnvelopeWire {
+    actor: String,
+    session: String,
+    branch: String,
+    context_hash: [u8; 32],
+    delegation: Vec<String>,
+    derived_from: Vec<SourceWire>,
+    intent: String,
+    policy: Option<String>,
+    signature: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SourceWire {
+    system: String,
+    record_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TableWire {
+    changes: Vec<ChangeWire>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ChangeWire {
+    row: Vec<ValueWire>,
+    weight: i64,
+    primary_key: Vec<u8>,
+    pages: Vec<LogicalPageNo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum ValueWire {
+    Null,
+    Int(i64),
+    Str(String),
+    Bool(bool),
+    Float(u64),
+}
+
+fn encode_draft(draft: &CommitDraft) -> Result<Vec<u8>, BridgeError> {
+    let wire = CaptureWire {
+        magic: CAPTURE_MAGIC,
+        tenant: draft.tenant.as_str().to_owned(),
+        plane: draft.plane.clone(),
+        commit_seq: draft.commit_seq,
+        branch: draft.branch.as_str().to_owned(),
+        envelope: EnvelopeWire {
+            actor: draft.envelope.actor.as_str().to_owned(),
+            session: draft.envelope.session.as_str().to_owned(),
+            branch: draft.envelope.branch.as_str().to_owned(),
+            context_hash: draft.envelope.context_hash,
+            delegation: draft
+                .envelope
+                .delegation
+                .iter()
+                .map(|actor| actor.as_str().to_owned())
+                .collect(),
+            derived_from: draft
+                .envelope
+                .derived_from
+                .iter()
+                .map(|source| SourceWire {
+                    system: source.system.clone(),
+                    record_id: source.record_id.clone(),
+                })
+                .collect(),
+            intent: draft.envelope.intent.clone(),
+            policy: draft
+                .envelope
+                .policy
+                .as_ref()
+                .map(|policy| policy.as_str().to_owned()),
+            signature: draft.envelope.signature.clone(),
+        },
+        tables: draft
+            .tables
+            .iter()
+            .map(|(name, table)| {
+                let wire = TableWire {
+                    changes: table
+                        .changes
+                        .iter()
+                        .map(|change| ChangeWire {
+                            row: change.row.values().iter().map(value_to_wire).collect(),
+                            weight: change.weight,
+                            primary_key: change.primary_key.clone(),
+                            pages: change.pages.iter().copied().collect(),
+                        })
+                        .collect(),
+                };
+                (name.clone(), wire)
+            })
+            .collect(),
+    };
+    capture_codec()
+        .serialize(&wire)
+        .map_err(|error| BridgeError::CaptureEncode {
+            reason: error.to_string(),
+        })
+}
+
+fn decode_draft(bytes: &[u8]) -> Result<CommitDraft, String> {
+    let wire: CaptureWire = capture_codec()
+        .deserialize(bytes)
+        .map_err(|error| error.to_string())?;
+    if wire.magic != CAPTURE_MAGIC {
+        return Err("capture magic/version is not MTNYCAP1".to_owned());
+    }
+    let envelope = WriteEnvelope {
+        actor: ActorId::new(wire.envelope.actor),
+        session: SessionId::new(wire.envelope.session),
+        branch: BranchId::new(wire.envelope.branch),
+        context_hash: wire.envelope.context_hash,
+        delegation: wire
+            .envelope
+            .delegation
+            .into_iter()
+            .map(ActorId::new)
+            .collect(),
+        derived_from: wire
+            .envelope
+            .derived_from
+            .into_iter()
+            .map(|source| SourceRef::new(source.system, source.record_id))
+            .collect(),
+        intent: wire.envelope.intent,
+        policy: wire.envelope.policy.map(PolicyDecisionId::new),
+        signature: wire.envelope.signature,
+    };
+    let tables = wire
+        .tables
+        .into_iter()
+        .map(|(name, table)| {
+            let changes = table
+                .changes
+                .into_iter()
+                .map(|change| CapturedChange {
+                    row: Row::new(change.row.into_iter().map(value_from_wire).collect()),
+                    weight: change.weight,
+                    primary_key: change.primary_key,
+                    pages: change.pages.into_iter().collect(),
+                })
+                .collect();
+            (name, CapturedTable { changes })
+        })
+        .collect();
+    Ok(CommitDraft {
+        tenant: TenantId::new(wire.tenant),
+        plane: wire.plane,
+        commit_seq: wire.commit_seq,
+        branch: BranchId::new(wire.branch),
+        envelope,
+        tables,
+    })
+}
+
+fn capture_codec() -> impl bincode::Options {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(MAX_CAPTURE_BYTES)
+        .reject_trailing_bytes()
+}
+
+fn value_to_wire(value: &Value) -> ValueWire {
+    match value {
+        Value::Null => ValueWire::Null,
+        Value::Int(value) => ValueWire::Int(*value),
+        Value::Str(value) => ValueWire::Str(value.clone()),
+        Value::Bool(value) => ValueWire::Bool(*value),
+        Value::Float(value) => ValueWire::Float(value.to_bits()),
+    }
+}
+
+fn value_from_wire(value: ValueWire) -> Value {
+    match value {
+        ValueWire::Null => Value::Null,
+        ValueWire::Int(value) => Value::Int(value),
+        ValueWire::Str(value) => Value::Str(value),
+        ValueWire::Bool(value) => Value::Bool(value),
+        ValueWire::Float(value) => Value::Float(f64::from_bits(value)),
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

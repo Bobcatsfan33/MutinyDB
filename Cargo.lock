@@ -232,6 +232,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc32c"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a47af21622d091a8f0fb295b88bc886ac74efcc613efc19f5d0b21de5c89e47"
+dependencies = [
+ "rustc_version",
+]
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -509,11 +518,14 @@ dependencies = [
 name = "mutiny-bridge"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "blake3",
  "loom-core",
  "schweep-log",
  "schweep-zset",
+ "serde",
  "substrate-pager",
+ "substrate-wal",
  "tempfile",
  "thiserror",
 ]
@@ -771,6 +783,17 @@ dependencies = [
  "bincode",
  "blake3",
  "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "substrate-wal"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "crc32c",
+ "serde",
+ "substrate-pager",
  "thiserror",
 ]
 

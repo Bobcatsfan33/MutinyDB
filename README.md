@@ -54,7 +54,8 @@ topology while preserving exact source provenance and release admission.
 
 1. Every imported tree matches `components.lock.json`.
 2. `mutiny-bridge` maps one storage commit to one compute epoch, requires a real Loom envelope,
-   audits physical pages against captured logical changes, and survives every append/seal crash seam.
+   stores the capture in the same substrate transaction, audits physical pages against captured
+   logical changes, and survives the storage-to-compute gap plus every append/seal crash seam.
 3. The randomized differential gate remains byte-identical to an independent direct-ingest control.
 4. Schweep produces `current-v0.1` after seven qualifying scheduled nights. Development uses the
    exact merged C13 snapshot; no product release may treat that snapshot as admitted.
@@ -72,6 +73,9 @@ cargo test --workspace --all-features --locked
 The nested component workflows are retained as import provenance; root workflows own the composed
 product result. No performance, security, availability, or enterprise-approval claim is inherited
 merely because a component repository made one about itself.
+
+The implemented write/recovery boundary and its bounded-transaction rule are documented in
+[`docs/M1-BRIDGE.md`](docs/M1-BRIDGE.md).
 
 Private during consolidation. Apache-2.0 when the product's M8 release and professional naming
 clearance gates say otherwise.

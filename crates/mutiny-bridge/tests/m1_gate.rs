@@ -2,13 +2,15 @@
 
 use loom_core::{ActorId, BranchId, SessionId, SourceRef, TenantId, WriteEnvelope};
 use mutiny_bridge::{
-    apply_commit, ApplyDisposition, BridgeError, CapturedChange, CapturedTable, CommitCapture,
-    EnvelopeAuthority, EnvelopeId, DERIVATION_TABLE,
+    apply_commit, commit_with_capture, derivation_schema, recover_capture,
+    recover_pending_captures, ApplyDisposition, BridgeError, CapturedChange, CapturedTable,
+    CommitCapture, CommitDraft, EnvelopeAuthority, EnvelopeId, CAPTURE_PAGE, DERIVATION_TABLE,
 };
 use schweep_log::{FaultInjector, FaultPlan, Log, Seam, SyncPolicy};
 use schweep_zset::{DataType, Field, Row, Schema, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use substrate_pager::{Manifest, ManifestBody, ManifestId, PageId};
+use substrate_pager::{std_vfs, Manifest, ManifestBody, ManifestId, PageId, StoreConfig};
+use substrate_wal::DurableStore;
 
 #[derive(Debug)]
 struct ExactAuthority {
@@ -35,19 +37,7 @@ fn schemas() -> BTreeMap<String, Schema> {
             ])
             .unwrap(),
         ),
-        (
-            DERIVATION_TABLE.to_owned(),
-            Schema::new_table(vec![
-                Field::not_null("tenant", DataType::Utf8),
-                Field::not_null("branch", DataType::Utf8),
-                Field::not_null("table_name", DataType::Utf8),
-                Field::not_null("row_key", DataType::Utf8),
-                Field::not_null("source_system", DataType::Utf8),
-                Field::not_null("source_record", DataType::Utf8),
-                Field::not_null("envelope", DataType::Utf8),
-            ])
-            .unwrap(),
-        ),
+        (DERIVATION_TABLE.to_owned(), derivation_schema().unwrap()),
     ])
 }
 
@@ -275,6 +265,139 @@ fn a_foreign_pending_writer_cannot_be_folded_into_the_commit_epoch() {
         Err(BridgeError::ForeignPendingBatch { .. })
     ));
     assert_eq!(log.sealed_epoch(), 0);
+}
+
+#[test]
+fn a_row_the_compute_catalog_cannot_accept_never_commits_to_storage() {
+    let storage_dir = tempfile::tempdir().unwrap();
+    let store = DurableStore::open(std_vfs(), storage_dir.path(), StoreConfig::default()).unwrap();
+    store.recover().unwrap();
+    let original_head = store.head();
+    let (fixture, authority) = capture(1);
+    let mut tables = fixture.tables;
+    tables
+        .get_mut("claims")
+        .expect("fixture table")
+        .changes
+        .get_mut(0)
+        .expect("fixture change")
+        .row = Row::new(vec![Value::Float(1.0), Value::Str("invalid".to_owned())]);
+    let draft = CommitDraft {
+        tenant: fixture.tenant,
+        plane: fixture.plane,
+        commit_seq: fixture.commit_seq,
+        branch: fixture.branch,
+        envelope: fixture.envelope,
+        tables,
+    };
+    let mut transaction = store.begin().unwrap();
+    store
+        .write(&mut transaction, 7, b"would-be-committed".to_vec())
+        .unwrap();
+    assert!(commit_with_capture(&store, transaction, &draft, &schemas(), &authority).is_err());
+    assert_eq!(store.head(), original_head);
+}
+
+#[test]
+fn crash_after_storage_commit_recovers_capture_from_the_same_manifest() {
+    let storage_dir = tempfile::tempdir().unwrap();
+    let compute_dir = tempfile::tempdir().unwrap();
+    let store = DurableStore::open(std_vfs(), storage_dir.path(), StoreConfig::default()).unwrap();
+    store.recover().unwrap();
+    let (fixture, authority) = capture(1);
+    let draft = CommitDraft {
+        tenant: fixture.tenant,
+        plane: fixture.plane,
+        commit_seq: fixture.commit_seq,
+        branch: fixture.branch,
+        envelope: fixture.envelope,
+        tables: fixture.tables,
+    };
+    let mut transaction = store.begin().unwrap();
+    store
+        .write(&mut transaction, 7, b"claim-page".to_vec())
+        .unwrap();
+    let committed =
+        commit_with_capture(&store, transaction, &draft, &schemas(), &authority).unwrap();
+    assert!(committed.physical_pages.contains(&CAPTURE_PAGE));
+    let committed_id = committed.commit;
+
+    // The process dies here: substrate committed, but no compute log was even opened.
+    drop(store);
+    let recovered_store =
+        DurableStore::open(std_vfs(), storage_dir.path(), StoreConfig::default()).unwrap();
+    recovered_store.recover().unwrap();
+    assert_eq!(recovered_store.head(), committed_id);
+    let recovered = recover_capture(&recovered_store, committed_id).unwrap();
+    assert_eq!(recovered.commit_seq, 1);
+    assert_eq!(recovered.tables, draft.tables);
+    assert_eq!(recovered.envelope, draft.envelope);
+
+    let mut faults = FaultInjector::inert();
+    let mut log = Log::open(compute_dir.path(), schemas(), &mut faults, SyncPolicy::Full).unwrap();
+    let receipt = apply_commit(&mut log, &recovered, &authority, &mut faults).unwrap();
+    assert_eq!(receipt.epoch, 1);
+    assert_eq!(log.sealed_epoch(), 1);
+}
+
+#[test]
+fn manifest_history_is_the_durable_queue_for_multiple_unapplied_commits() {
+    let storage_dir = tempfile::tempdir().unwrap();
+    let compute_dir = tempfile::tempdir().unwrap();
+    let store = DurableStore::open(std_vfs(), storage_dir.path(), StoreConfig::default()).unwrap();
+    store.recover().unwrap();
+    let mut authority_for_apply = None;
+
+    for seq in 1..=3 {
+        let (fixture, authority) = capture(seq);
+        authority_for_apply = Some(authority);
+        let draft = CommitDraft {
+            tenant: fixture.tenant,
+            plane: fixture.plane,
+            commit_seq: fixture.commit_seq,
+            branch: fixture.branch,
+            envelope: fixture.envelope,
+            tables: fixture.tables,
+        };
+        let mut transaction = store.begin().unwrap();
+        store
+            .write(
+                &mut transaction,
+                7,
+                format!("claim-page-{seq}").into_bytes(),
+            )
+            .unwrap();
+        commit_with_capture(
+            &store,
+            transaction,
+            &draft,
+            &schemas(),
+            authority_for_apply.as_ref().expect("authority was set"),
+        )
+        .unwrap();
+    }
+    let head = store.head();
+    drop(store);
+
+    let recovered_store =
+        DurableStore::open(std_vfs(), storage_dir.path(), StoreConfig::default()).unwrap();
+    recovered_store.recover().unwrap();
+    let pending = recover_pending_captures(&recovered_store, head, 0).unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|capture| capture.commit_seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+
+    let mut faults = FaultInjector::inert();
+    let mut log = Log::open(compute_dir.path(), schemas(), &mut faults, SyncPolicy::Full).unwrap();
+    let authority = authority_for_apply.expect("three commits create an authority");
+    for capture in pending {
+        apply_commit(&mut log, &capture, &authority, &mut faults).unwrap();
+    }
+    assert_eq!(log.sealed_epoch(), 3);
 }
 
 #[test]

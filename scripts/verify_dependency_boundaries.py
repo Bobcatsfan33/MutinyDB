@@ -12,7 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_COMPONENT_EDGES = {
     "mutiny-charter": set(),
-    "mutiny-bridge": {"loom-core", "schweep-log", "schweep-zset", "substrate-pager"},
+    "mutiny-bridge": {
+        "loom-core",
+        "schweep-log",
+        "schweep-zset",
+        "substrate-pager",
+        "substrate-wal",
+    },
 }
 COMPONENT_ROOT = ROOT / "components"
 

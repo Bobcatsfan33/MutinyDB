@@ -38,10 +38,13 @@ exclude = [
 # composed development and testing; they do not change the component lock's release-admission state.
 [workspace.dependencies]
 blake3 = "1.5"
+bincode = "1.3"
 loom-core = { path = "components/loomdb/crates/loom-core" }
 schweep-log = { path = "components/schweep/crates/schweep-log" }
 schweep-zset = { path = "components/schweep/crates/schweep-zset" }
+serde = { version = "1", features = ["derive"] }
 substrate-pager = { path = "components/substrate/crates/substrate-pager" }
+substrate-wal = { path = "components/substrate/crates/substrate-wal" }
 thiserror = "2"
 
 # The lints M1's crates inherit with `[lints] workspace = true`. They were stated before code,
