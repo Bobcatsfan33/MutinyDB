@@ -428,6 +428,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -588,6 +598,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "loom-action"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "loom-core",
+ "loom-policy",
+]
+
+[[package]]
+name = "loom-branch"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "blake3",
+ "ed25519-dalek",
+ "fs2",
+ "getrandom 0.2.17",
+ "loom-core",
+ "loom-keys",
+ "serde",
+ "serde_json",
+ "substrate-pager",
+ "substrate-security",
+ "thiserror",
+]
+
+[[package]]
 name = "loom-core"
 version = "0.1.0"
 dependencies = [
@@ -598,6 +635,24 @@ dependencies = [
  "serde",
  "substrate-pager",
  "thiserror",
+]
+
+[[package]]
+name = "loom-keys"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "loom-policy"
+version = "0.1.0"
+dependencies = [
+ "loom-core",
+ "serde",
 ]
 
 [[package]]
@@ -637,6 +692,18 @@ dependencies = [
  "prism-types",
  "schweep-zset",
  "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "mutiny-trust"
+version = "0.1.0"
+dependencies = [
+ "loom-action",
+ "loom-branch",
+ "loom-core",
+ "loom-policy",
+ "mutiny-semantic",
  "thiserror",
 ]
 
@@ -1121,6 +1188,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "substrate-security"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "rand_core",
+ "serde",
+ "serde_json",
+ "substrate-pager",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "substrate-wal"
 version = "0.1.0"
 dependencies = [
@@ -1302,6 +1384,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
+
+[[package]]
 name = "windows-core"
 version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1473,6 +1577,20 @@ name = "zeroize"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "zmij"

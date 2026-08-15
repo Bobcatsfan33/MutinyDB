@@ -26,6 +26,7 @@ ALLOWED_COMPONENT_EDGES = {
         "prism-types",
         "schweep-zset",
     },
+    "mutiny-trust": {"loom-action", "loom-branch", "loom-core", "loom-policy"},
 }
 COMPONENT_ROOT = ROOT / "components"
 

@@ -13,14 +13,16 @@ receipts and compensation required to address them.
 
 **Not approved for production. Not a software release candidate.**
 
-The consolidation has completed **M1** and the composed **M2 semantic path**. The complete source of all four components is present
+The consolidation has completed **M1**, the composed **M2 semantic path**, and the **M3 mounted trust plane**. The complete source of all four components is present
 under `components/`, pinned to exact commits and trees by [`components.lock.json`](components.lock.json).
 Presence and development linkage are not release admission: every component remains quarantined
 until its exact release and composed product gates pass. `mutiny-bridge` now implements the first
 real substrate/Loom/Schweep seam. `mutiny-semantic` now provides generation-pinned bridge
 embedding, bounded incremental top-k and mergeable grouping, dual-generation cutover, cold one-shot
-routing, and exact PrismDB oracle gates. A mounted trust plane, a supported `mutinyd` binary, fleet
-operation, external assurance, and production approval remain open.
+routing, and exact PrismDB oracle gates. `mutiny-trust` mounts Loom capability checks over
+branch-scoped standing results and separates inert agent proposals from the operator-only action
+gateway by type. Cross-circuit taint, durable forked operator state, a supported `mutinyd` binary,
+fleet operation, external assurance, and production approval remain open.
 
 | Component | Product role | Imported state | Admission |
 | --- | --- | --- | --- |
@@ -64,6 +66,8 @@ topology while preserving exact source provenance and release admission.
 5. Root compatibility, M0 charter, and component provenance gates remain green.
 6. M2's frozen hybrid corpus traverses bridge embedding, incremental top-k, semantic grouping,
    dual-generation cutover, and cold routing; real Prism exact and rerank answers match bit-for-bit.
+7. M3's branch-result isolation gate, Loom scripted MCP demo, and four unmodified Loom model oracles
+   remain green; the agent handle contains no action gateway.
 
 ## Run the current gates
 
@@ -80,6 +84,8 @@ merely because a component repository made one about itself.
 
 The implemented write/recovery boundary and its bounded-transaction rule are documented in
 [`docs/M1-BRIDGE.md`](docs/M1-BRIDGE.md).
+The semantic and mounted trust contracts are documented in [`docs/M2-SEMANTIC.md`](docs/M2-SEMANTIC.md)
+and [`docs/M3-TRUST.md`](docs/M3-TRUST.md).
 
 Private during consolidation. Apache-2.0 when the product's M8 release and professional naming
 clearance gates say otherwise.
