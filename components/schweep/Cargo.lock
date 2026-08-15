@@ -534,7 +534,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "schweep-batch"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-bench"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-batch",
  "schweep-memo",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-circuit"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-log",
  "schweep-ops",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-crash"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-batch",
  "schweep-circuit",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-differential"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rand_chacha 0.10.0",
  "rand_core 0.10.1",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-log"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-state",
  "schweep-zset",
@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-memo"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-circuit",
  "schweep-ops",
@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-ops"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-plan",
  "schweep-state",
@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-oracle"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-plan",
  "schweep-zset",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-plan"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-zset",
  "thiserror",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-server"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-batch",
  "schweep-circuit",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-soak"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-circuit",
  "schweep-differential",
@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-sql"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "schweep-circuit",
  "schweep-ops",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-state"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "redb",
  "schweep-zset",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "schweep-zset"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",

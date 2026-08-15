@@ -27,7 +27,7 @@
 //! subscriber that crashes and resumes at its token sees exactly the epochs it has not consumed, because
 //! the server never recorded where it had got to and therefore cannot get that record wrong.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use schweep_circuit::{checkpoint, Epoch};
@@ -71,6 +71,29 @@ pub struct EpochDelta {
     pub epoch: Epoch,
     /// The delta, rendered — the same canonical form the differential harness compares (S-8).
     pub rendered: String,
+}
+
+/// Auditable outcome of one source-scoped retraction (D-27).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetractionReceipt {
+    /// `None` means the source/predicate selected no current contribution and no epoch was created.
+    pub sealed_epoch: Option<Epoch>,
+    pub tables: usize,
+    pub rows: usize,
+    pub multiplicity: u128,
+}
+
+impl RetractionReceipt {
+    #[must_use]
+    pub fn render(&self) -> String {
+        match self.sealed_epoch {
+            Some(epoch) => format!(
+                "retracted\nepoch {epoch}\ntables {}\nrows {}\nmultiplicity {}\n",
+                self.tables, self.rows, self.multiplicity
+            ),
+            None => "no-op\ntables 0\nrows 0\nmultiplicity 0\n".to_owned(),
+        }
+    }
 }
 
 /// A registration as the server holds it: the memo's handle, the text it came from, and its deltas.
@@ -403,6 +426,130 @@ impl Engine {
             self.ingest(source, &table, &token, entries)?;
         }
         self.seal()
+    }
+
+    /// Remove a source's current net contribution through the ordinary delta path (C11, D-27).
+    ///
+    /// `predicate` is valid only with `table` and is bound by the same SQL implementation as WHERE.
+    /// The negative batches retain `source` as their source id, so a completed retry sees net zero.
+    pub fn retract_source(
+        &mut self,
+        source: &str,
+        table: Option<&str>,
+        predicate: Option<&str>,
+    ) -> ServerResult<RetractionReceipt> {
+        if predicate.is_some() && table.is_none() {
+            return Err(ServerError::Sql(schweep_sql::SqlError::Parse(
+                "a source-retraction predicate requires a table".to_owned(),
+            )));
+        }
+        if let Some(table) = table {
+            if !self.catalog.contains_key(table) {
+                return Err(ServerError::Log(schweep_log::LogError::UnknownTable(
+                    table.to_owned(),
+                )));
+            }
+        }
+
+        let bound_predicate = match (table, predicate) {
+            (Some(table), Some(predicate)) if !predicate.trim().is_empty() => Some(
+                schweep_sql::bind_where_predicate(table, predicate, &self.catalog)?,
+            ),
+            _ => None,
+        };
+        let contributions = schweep_batch::source_integral(&self.log, &self.catalog, source)?;
+        let mut batches = Vec::new();
+        let token_prefix = format!("retract:{source}:");
+        let pending_retractions: Vec<_> = self
+            .log
+            .pending_batches()
+            .iter()
+            .filter(|batch| {
+                batch.source_id == source && batch.dedup_token.starts_with(&token_prefix)
+            })
+            .cloned()
+            .collect();
+        let mut tables_seen: BTreeSet<String> = pending_retractions
+            .iter()
+            .map(|batch| batch.table.clone())
+            .collect();
+        let mut rows: usize = pending_retractions
+            .iter()
+            .map(|batch| batch.entries.len())
+            .sum();
+        let mut multiplicity: u128 = pending_retractions
+            .iter()
+            .flat_map(|batch| batch.entries.iter())
+            .map(|(_, weight)| u128::from(weight.unsigned_abs()))
+            .sum();
+        let target_epoch = self.log.sealed_epoch() + 1;
+
+        for (candidate, integral) in contributions {
+            if table.is_some_and(|selected| selected != candidate) {
+                continue;
+            }
+            let mut selected = Vec::new();
+            for (row, weight) in integral
+                .entries()
+                .map_err(schweep_batch::BatchError::ZSet)?
+            {
+                let matches = match &bound_predicate {
+                    None => true,
+                    Some(predicate) => {
+                        schweep_plan::is_true(&predicate.expression, &row, &predicate.scope)
+                            .map_err(schweep_sql::SqlError::Plan)?
+                    }
+                };
+                if matches {
+                    let negative = weight.checked_neg().ok_or({
+                        schweep_batch::BatchError::ZSet(schweep_zset::ZSetError::WeightOverflow {
+                            while_doing: "negating a source contribution",
+                        })
+                    })?;
+                    rows += 1;
+                    multiplicity += u128::from(weight.unsigned_abs());
+                    selected.push((row, negative));
+                }
+            }
+            if selected.is_empty() {
+                continue;
+            }
+            let identity = schweep_log::Record::Append {
+                source_id: source.to_owned(),
+                dedup_token: String::new(),
+                table: candidate.clone(),
+                entries: selected.clone(),
+            }
+            .content_hash();
+            let token = format!("retract:{source}:{target_epoch}:{candidate}:{identity:016x}");
+            tables_seen.insert(candidate.clone());
+            batches.push((candidate, token, selected));
+        }
+
+        if batches.is_empty() {
+            if !pending_retractions.is_empty() {
+                let epoch = self.seal()?;
+                return Ok(RetractionReceipt {
+                    sealed_epoch: Some(epoch),
+                    tables: tables_seen.len(),
+                    rows,
+                    multiplicity,
+                });
+            }
+            return Ok(RetractionReceipt {
+                sealed_epoch: None,
+                tables: 0,
+                rows: 0,
+                multiplicity: 0,
+            });
+        }
+        let epoch = self.transaction(source, batches)?;
+        Ok(RetractionReceipt {
+            sealed_epoch: Some(epoch),
+            tables: tables_seen.len(),
+            rows,
+            multiplicity,
+        })
     }
 
     /// Register a standing query (D-22): compile, catch up from disk, persist, then answer.

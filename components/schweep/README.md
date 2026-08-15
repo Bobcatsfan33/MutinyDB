@@ -19,7 +19,7 @@ dataset) and then torn down — same machinery, one code path.
 Schweep is the compute plane of a future database called MutinyDB, but it is a **standalone
 engine**: it has no dependency on any sibling system, and none may be added.
 
-## Status: Sprint C10 implementation complete; CI-gated (with the gaps named below)
+## Status: C13 release-candidate hardening in progress; the v0.1 tag is evidence-blocked
 
 Schweep is near the beginning. Sprints are numbered C0–C13 and a sprint is complete only when its
 exit gate is green in CI. There are no dates.
@@ -79,14 +79,44 @@ process, and resumes from its token with no epoch delivered twice and none lost.
 stream a compacted Parquet snapshot plus its retained suffix; prefix probes and aggregate folds have
 bounded intermediate memory; and `consolidate()` is a stable sort plus a linear merge rather than one
 B-tree insertion per row. `EXPLAIN MAINTENANCE` exposes measured work counters through the embedded API
-and `GET /explain-maintenance`. Arrow Flight remains deferred to C13, and C11–C13 have not started.
+and `GET /explain-maintenance`.
 `schweep-oracle` remains deliberately slow because its job is to be obviously correct, not quick.
+
+**C11 source-scoped retraction is complete.** Every batch's `source_id` survives compaction in an
+authenticated snapshot-v2 `PROVENANCE` ledger. `POST /retract-source` resolves that source's current net
+contribution, optionally applies ordinary SQL `WHERE` semantics to one table, and feeds the negative
+delta through the same epoch path as any other change. The generated transaction remains attributed to
+the source, so a completed retry is a no-op. The C11 differential gate exercises 128 seeded histories,
+four query families, shared memo registrations, compaction, and restart against an oracle rebuilt
+without the source.
+
+**C12's bounded accelerator spike returned `GO` for later design work, not for production code.** The
+criteria were committed before the implementation. On the recorded Apple M2, one fused Metal integer
+filter/sum was 89.85x faster at 1 million rows and 85.98x faster at 10 million rows by paired median,
+including buffer copies, command setup, synchronization, and final reduction. Three warm-ups and all 66
+measured executions matched the current C10 CPU one-shot result exactly. The magnitude identifies the
+cost of the general one-shot circuit and an opportunity for a specialized cold path; it does not prove
+wider SQL semantics or another GPU platform. CPU remains the only shipped path.
+
+**C13 has frozen the release-candidate surface, not released it.** The supported API and patch-level
+compatibility promise are in [`docs/current-api.md`](docs/current-api.md). Ten separately named CI jobs
+map I-1 through I-10 to executable gates; scheduled jobs add a 44,000-seed differential sweep and a
+100,000-cycle crash sweep. Both extended populations are green on the merged C13 commit in hosted
+run [`31906947809`](https://github.com/Bobcatsfan33/schweep/actions/runs/31906947809): 248,321
+differential comparisons with zero divergence and 100,000 crash/recovery cycles with all 26 named
+seams exercised. The manual dispatch proves those populations but does not count toward the scheduled
+night streak. The complete pre-C13 GitHub CI history—36 runs through main run
+`31903930881`, not an invented 50—was audited, and all four historical failures map to fixes and later green proof in
+[`testing/evidence/c13-ci-audit.json`](testing/evidence/c13-ci-audit.json). Arrow Flight remains out of
+v0.1 by D-29 because the repository has no workload evidence that transport is the current bottleneck.
+The `current-v0.1` release workflow fails closed until seven different scheduled nights have both the
+full-sync crash job and server soak green. Four nights currently qualify; the tag does not yet exist.
 
 **Numbers we publish:** each traces to a committed artifact in
 `testing/evidence/` — `c8-state-costs.json` and `c9-bounds.json` (deterministic, both recomputed by a
 test), `c8-cache-sweep.json`, `c9-memo-ceiling.json` and `c9-soak.json` (machine-dependent, and labelled as
-such), and `c10-benchmarks.json`. On the recorded 8-core Apple-arm64 host, using the **slowest** of 11
-release rounds: a 10,000-row maintenance batch cost **3.176 µs per changed row**, a compact 128-row answer
+such), `c10-benchmarks.json`, and `c12-accelerator.json`. On the recorded 8-core Apple-arm64 host, using
+the **slowest** of 11 release rounds: a 10,000-row maintenance batch cost **3.176 µs per changed row**, a compact 128-row answer
 over 100,000 retained input rows cost **18.068 µs per standing read**, and the 10,001st member of a
 10,000-query shared swarm cost **1.786 ms for the marginal query**. In the paired TPC-H SF0.1 projection,
 Schweep one-shot was **89.46× slower than DuckDB** at each engine's slowest round. That comparison uses
@@ -141,25 +171,38 @@ docs/                    SEMANTICS.md, PROGRESS.md, DECISIONS.md
 `schweep-plan` is not in `ARCHITECTURE.md` §5's crate map; it was added in C1 and the reason is
 recorded as **D-14** in [`docs/DECISIONS.md`](docs/DECISIONS.md), before the code moved.
 
-**Known limitations, before you find them:** the log no longer holds batches resident, but it still keeps
-one dedup token per acknowledged append and a 16-byte span per epoch; both legitimately grow with history.
-Retained subscription deltas are not durable—a subscriber that falls behind across a restart must re-read
-the durable answer. State can spill beyond memory, but the frozen snapshot method still returns a byte
-vector, so checkpointing that state materializes it (D-18). Compaction is callable and recoverable but has
-no automatic policy. A snapshot holds rows rather than source provenance, which C11's source-scoped
-retraction needs.
+## Known limitations (sourced from open issues, 2026-08-15)
 
-A memo is not checkpointable because its shape is its live query set. `schweepd` rebuilds each
-registration by streaming the snapshot and retained suffix (D-22), so registration remains O(data) per
-query while maintenance is O(change). The SQL dialect remains narrower than the typed API for combined
-group-and-project shapes. There is no stored non-integer arithmetic: `Float64` is result-only from `AVG`,
-and fixed-point decimal remains Q-1. `RocksBackend` was not delivered; redb is the durable B-tree backend
-(D-19), with `MemBackend` as the invariant-checking implementation. The TPC-H evidence covers one
-supported projection, not the official suite. Finally, nothing here tests power loss: the 10,000-cycle
-fault gate and 1,000 real `SIGKILL`s model process death, not a dying machine. `docs/DURABILITY.md` carries
-the exact coverage table.
+This is the honesty boundary for v0.1. The linked issues—not memory or marketing—are the source of the
+list, and closing one requires both an implementation and its evidence gate.
 
-Crates named in §5 that do not appear above have not been written yet.
+- Stored non-integer arithmetic is absent: `Float64` is result-only from `AVG`; exact `Decimal128`
+  semantics remain [#4](https://github.com/Bobcatsfan33/schweep/issues/4).
+- Retained subscription deltas are not durable across restart
+  ([#5](https://github.com/Bobcatsfan33/schweep/issues/5)); streaming operator state is not checkpointed
+  ([#6](https://github.com/Bobcatsfan33/schweep/issues/6)).
+- Compaction is callable and crash-safe but has no automatic operating policy
+  ([#7](https://github.com/Bobcatsfan33/schweep/issues/7)). The shared memo is rebuilt per registration,
+  so cold registration remains O(data) per query ([#8](https://github.com/Bobcatsfan33/schweep/issues/8)).
+- SQL is intentionally narrow and the benchmark is one supported TPC-H-shaped projection, not the
+  official suite ([#9](https://github.com/Bobcatsfan33/schweep/issues/9)).
+- Process-death coverage is extensive, but a real power-cut storage lab remains
+  [#10](https://github.com/Bobcatsfan33/schweep/issues/10).
+- A source retraction must fit current admission bounds; resumable large recalls remain
+  [#11](https://github.com/Bobcatsfan33/schweep/issues/11).
+- The Metal result authorizes design only. A portable, admitted, fault-safe accelerator boundary remains
+  [#12](https://github.com/Bobcatsfan33/schweep/issues/12), and columnar/Flight transport remains
+  [#13](https://github.com/Bobcatsfan33/schweep/issues/13).
+- Dedup tokens and epoch spans legitimately grow with history
+  ([#14](https://github.com/Bobcatsfan33/schweep/issues/14)). Snapshot v1 is readable but cannot honestly
+  reconstruct discarded source ownership ([#15](https://github.com/Bobcatsfan33/schweep/issues/15)).
+- Standalone HTTP is loopback-only, plaintext, and unauthenticated; authenticated/encrypted remote
+  transport belongs at the composed product boundary ([#16](https://github.com/Bobcatsfan33/schweep/issues/16)).
+- Backup and restore have tested storage primitives but not a complete operator workflow with drill
+  receipts ([#17](https://github.com/Bobcatsfan33/schweep/issues/17)).
+
+`docs/DURABILITY.md` carries the exact failure-coverage table. `docs/current-api.md` defines what v0.1
+does promise despite these limitations.
 
 ## License
 

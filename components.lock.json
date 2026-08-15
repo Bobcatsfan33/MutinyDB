@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "product": "MutinyDB",
-  "assessedAt": "2026-08-14",
+  "assessedAt": "2026-08-15",
   "sourceMode": "monorepo-import",
   "components": [
     {
@@ -52,15 +52,16 @@
       "name": "schweep",
       "repository": "https://github.com/Bobcatsfan33/schweep",
       "path": "components/schweep",
-      "commit": "c4b6268fff0acba3626313161011e071e515c27e",
-      "sourceTree": "b8905ae1b5b88be05b8609bfc8906eb49a3381a8",
-      "tree": "b8905ae1b5b88be05b8609bfc8906eb49a3381a8",
+      "commit": "220bf6b532835f1f1b6937a5895945a282bbd0d4",
+      "sourceTree": "616f05b51c60d61874a1bbbf920d151cc9726708",
+      "tree": "616f05b51c60d61874a1bbbf920d151cc9726708",
       "releaseTag": null,
       "phase": "compute",
       "admitted": false,
       "blockers": [
-        "Schweep C10 is complete; C11 through C13 have not started.",
-        "The required schweep-v0.1 release does not exist."
+        "C11 through C13 implementation is complete, but the C13 release contract has only four of seven qualifying scheduled nights.",
+        "The required current-v0.1 release tag does not exist yet.",
+        "Release admission remains blocked until the composed M1 gate and the upstream release contract both pass."
       ]
     }
   ]

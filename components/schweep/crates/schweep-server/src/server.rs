@@ -183,6 +183,19 @@ impl Server {
                 let batches = decode_transaction(&request.body)?;
                 Ok(format!("{}\n", self.engine.transaction(&source, batches)?))
             }
+            ("POST", "/retract-source") => {
+                let source = param(request, "source")?;
+                let table = request.query.get("table").map(String::as_str);
+                let predicate = if request.body.is_empty() {
+                    None
+                } else {
+                    Some(body_text(request)?)
+                };
+                Ok(self
+                    .engine
+                    .retract_source(&source, table, predicate.as_deref())?
+                    .render())
+            }
             ("POST", "/register") => {
                 let sql = body_text(request)?;
                 let admission = match request.query.get("unbounded") {

@@ -59,6 +59,15 @@ pub use instantiate::{children, instantiate, instantiate_with, operator_for, ope
 pub use select::BoundQuery;
 
 use schweep_plan::bind::Catalog;
+use schweep_plan::Expr;
+use schweep_zset::Schema;
+
+/// A C11 predicate and the qualified input scope it was bound against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundPredicate {
+    pub expression: Expr,
+    pub scope: Schema,
+}
 
 /// SQL text → a bound query (S-9 … S-36). The whole front half of the pipeline.
 pub fn bind_sql(sql: &str, catalog: &Catalog) -> Result<BoundQuery> {
@@ -71,4 +80,38 @@ pub fn bind_sql(sql: &str, catalog: &Catalog) -> Result<BoundQuery> {
 pub fn compile(sql: &str, catalog: &Catalog) -> Result<CircuitPlan> {
     let bound = bind_sql(sql, catalog)?;
     incrementalize(&bound, catalog)
+}
+
+/// Bind a standalone C11 source-retraction predicate with exactly the same rules as `WHERE`.
+///
+/// Wrapping the expression in a minimal SELECT intentionally reuses the public SQL pipeline. This
+/// keeps qualification, three-valued logic, type checking, and refusals identical to a query filter.
+pub fn bind_where_predicate(
+    table: &str,
+    predicate: &str,
+    catalog: &Catalog,
+) -> Result<BoundPredicate> {
+    let schema = catalog
+        .get(table)
+        .ok_or_else(|| SqlError::Plan(schweep_plan::PlanError::UnknownTable(table.to_owned())))?;
+    let field = schema.fields().first().ok_or_else(|| {
+        SqlError::Parse(format!(
+            "table {table:?} has no columns, so a predicate cannot be bound"
+        ))
+    })?;
+    let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
+    let sql = format!(
+        "SELECT {}.{} AS __source_retraction_probe FROM {} WHERE {predicate}",
+        quote(table),
+        quote(&field.name),
+        quote(table)
+    );
+    let bound = bind_sql(&sql, catalog)?;
+    let expression = bound.query.filter.ok_or_else(|| {
+        SqlError::Parse("source-retraction predicate produced no WHERE expression".to_owned())
+    })?;
+    Ok(BoundPredicate {
+        expression,
+        scope: bound.bound.input_schema,
+    })
 }

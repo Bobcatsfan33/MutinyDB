@@ -8,6 +8,7 @@
 //!     t.parquet          the integral of table t as of epoch 4, consolidated
 //!     u.parquet
 //!     DEDUP              the acknowledged tokens (schweep-log's format — see why below)
+//!     PROVENANCE         net contribution per source and table (C11)
 //!     MANIFEST           epoch, per-file row count and checksum, dedup checksum
 //! ```
 //!
@@ -47,11 +48,14 @@ use parquet::arrow::ArrowWriter;
 use schweep_zset::{EpochDeltas, Schema, ZSetBatch};
 
 use crate::error::{BatchError, Result};
+use crate::source::SourceIntegrals;
 
 /// The reserved weight column.
 pub const WEIGHT_COLUMN: &str = "__weight";
 /// The manifest file inside a snapshot.
 pub const MANIFEST: &str = "MANIFEST";
+/// The source-attribution ledger inside a v2 snapshot.
+pub const PROVENANCE: &str = "PROVENANCE";
 
 /// What a snapshot's manifest records.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,16 +64,22 @@ pub struct Manifest {
     /// Table → (rows written, CRC-32 of the file's bytes).
     pub tables: BTreeMap<String, (usize, u32)>,
     pub dedup_crc: u32,
+    /// `None` only for readable legacy v1 snapshots. New snapshots always carry this checksum.
+    pub provenance_crc: Option<u32>,
 }
 
 impl Manifest {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let mut body = format!("current snapshot v1\nepoch={}\n", self.epoch);
+        let version = if self.provenance_crc.is_some() { 2 } else { 1 };
+        let mut body = format!("current snapshot v{version}\nepoch={}\n", self.epoch);
         for (table, (rows, crc)) in &self.tables {
             body.push_str(&format!("table={table} rows={rows} crc={crc:08x}\n"));
         }
         body.push_str(&format!("dedup={:08x}\n", self.dedup_crc));
+        if let Some(crc) = self.provenance_crc {
+            body.push_str(&format!("provenance={crc:08x}\n"));
+        }
         format!(
             "{body}manifest={:08x}\n",
             schweep_log::record::crc32(body.as_bytes())
@@ -99,11 +109,19 @@ impl Manifest {
         let mut epoch = None;
         let mut tables = BTreeMap::new();
         let mut dedup_crc = None;
+        let mut provenance_crc = None;
+        let mut version = None;
         for line in body.lines() {
-            if let Some(value) = line.strip_prefix("epoch=") {
+            if line == "current snapshot v1" {
+                version = Some(1_u8);
+            } else if line == "current snapshot v2" {
+                version = Some(2_u8);
+            } else if let Some(value) = line.strip_prefix("epoch=") {
                 epoch = value.parse().ok();
             } else if let Some(value) = line.strip_prefix("dedup=") {
                 dedup_crc = u32::from_str_radix(value.trim(), 16).ok();
+            } else if let Some(value) = line.strip_prefix("provenance=") {
+                provenance_crc = u32::from_str_radix(value.trim(), 16).ok();
             } else if line.starts_with("table=") {
                 let mut name = None;
                 let mut rows = None;
@@ -121,6 +139,14 @@ impl Manifest {
                 }
             }
         }
+        let version = version.ok_or(BatchError::CorruptSnapshot {
+            what: "manifest has an unknown snapshot version",
+        })?;
+        if version == 2 && provenance_crc.is_none() {
+            return Err(BatchError::CorruptSnapshot {
+                what: "snapshot v2 manifest names no provenance checksum",
+            });
+        }
         Ok(Manifest {
             epoch: epoch.ok_or(BatchError::CorruptSnapshot {
                 what: "manifest names no epoch",
@@ -129,8 +155,106 @@ impl Manifest {
             dedup_crc: dedup_crc.ok_or(BatchError::CorruptSnapshot {
                 what: "manifest names no dedup checksum",
             })?,
+            provenance_crc,
         })
     }
+}
+
+/// Write deterministic source attribution using the log's already-tested record framing.
+pub fn write_provenance(path: &Path, sources: &SourceIntegrals) -> Result<u32> {
+    let mut bytes = Vec::new();
+    for (source_id, tables) in sources {
+        for (table, integral) in tables {
+            let consolidated = integral.consolidate()?;
+            if consolidated.is_empty() {
+                continue;
+            }
+            let record = schweep_log::Record::Append {
+                source_id: source_id.clone(),
+                dedup_token: String::new(),
+                table: table.clone(),
+                entries: consolidated.entries()?,
+            };
+            bytes.extend_from_slice(&schweep_log::record::frame(&record.encode()));
+        }
+    }
+    let crc = schweep_log::record::crc32(&bytes);
+    fs::write(path, bytes)?;
+    Ok(crc)
+}
+
+/// Read and authenticate a snapshot's source attribution.
+///
+/// `Ok(None)` means a valid legacy v1 snapshot, not an empty v2 ledger.
+pub fn read_provenance(
+    dir: &Path,
+    catalog: &BTreeMap<String, Schema>,
+) -> Result<Option<SourceIntegrals>> {
+    let manifest = Manifest::decode(&fs::read(dir.join(MANIFEST))?)?;
+    let Some(expected) = manifest.provenance_crc else {
+        return Ok(None);
+    };
+    let bytes = fs::read(dir.join(PROVENANCE))?;
+    if schweep_log::record::crc32(&bytes) != expected {
+        return Err(BatchError::CorruptSnapshot {
+            what: "the source provenance ledger failed its manifest checksum",
+        });
+    }
+
+    let mut raw: BTreeMap<String, BTreeMap<String, Vec<(schweep_zset::Row, i64)>>> =
+        BTreeMap::new();
+    let mut at = 0usize;
+    while at < bytes.len() {
+        let Some((record, next)) = schweep_log::record::read_framed(&bytes, at)? else {
+            return Err(BatchError::CorruptSnapshot {
+                what: "the source provenance ledger has a torn frame",
+            });
+        };
+        match record {
+            schweep_log::Record::Append {
+                source_id,
+                table,
+                entries,
+                ..
+            } => {
+                if !catalog.contains_key(&table) {
+                    return Err(BatchError::UnknownTable { table });
+                }
+                raw.entry(source_id)
+                    .or_default()
+                    .entry(table)
+                    .or_default()
+                    .extend(entries);
+            }
+            schweep_log::Record::SealEpoch { .. } => {
+                return Err(BatchError::CorruptSnapshot {
+                    what: "the source provenance ledger contains an epoch seal",
+                })
+            }
+        }
+        at = next;
+    }
+
+    let mut out = SourceIntegrals::new();
+    for (source_id, tables) in raw {
+        let mut built = BTreeMap::new();
+        for (table, entries) in tables {
+            let schema = catalog
+                .get(&table)
+                .cloned()
+                .ok_or_else(|| BatchError::UnknownTable {
+                    table: table.clone(),
+                })?;
+            let batch = ZSetBatch::from_entries(schema, entries)?.consolidate()?;
+            if !batch.is_empty() {
+                built.insert(table, batch);
+            }
+        }
+        if !built.is_empty() {
+            out.insert(source_id, built);
+        }
+    }
+    Ok(Some(out))
 }
 
 /// Write one table's integral as Parquet: its own columns, then `__weight`.
@@ -486,6 +610,7 @@ mod tests {
             epoch: 7,
             tables: BTreeMap::from([("t".to_owned(), (rows, schweep_log::record::crc32(&bytes)))]),
             dedup_crc: 0,
+            provenance_crc: None,
         };
         fs::write(dir.join(MANIFEST), manifest.encode()).unwrap();
 
@@ -554,6 +679,7 @@ mod tests {
             epoch: 4,
             tables: BTreeMap::from([("t".to_owned(), (3usize, 0xabcd_1234u32))]),
             dedup_crc: 7,
+            provenance_crc: Some(11),
         };
         let bytes = manifest.encode();
         assert_eq!(Manifest::decode(&bytes).unwrap(), manifest);
@@ -563,5 +689,54 @@ mod tests {
             *byte ^= 0xFF;
         }
         assert!(Manifest::decode(&damaged).is_err());
+    }
+
+    #[test]
+    fn source_provenance_round_trips_and_is_manifest_authenticated() {
+        let dir =
+            std::env::temp_dir().join(format!("schweep-snap-provenance-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let sources = SourceIntegrals::from([(
+            "source-a".to_owned(),
+            BTreeMap::from([(
+                "t".to_owned(),
+                ZSetBatch::from_entries(schema(), vec![(row(7, Some("owned"), Some(true)), 3)])
+                    .unwrap(),
+            )]),
+        )]);
+        let crc = write_provenance(&dir.join(PROVENANCE), &sources).unwrap();
+        let manifest = Manifest {
+            epoch: 9,
+            tables: BTreeMap::new(),
+            dedup_crc: 0,
+            provenance_crc: Some(crc),
+        };
+        fs::write(dir.join(MANIFEST), manifest.encode()).unwrap();
+        let catalog = BTreeMap::from([("t".to_owned(), schema())]);
+        let restored = read_provenance(&dir, &catalog).unwrap().unwrap();
+        let restored_table = restored
+            .get("source-a")
+            .and_then(|tables| tables.get("t"))
+            .unwrap();
+        let source_table = sources
+            .get("source-a")
+            .and_then(|tables| tables.get("t"))
+            .unwrap();
+        assert_eq!(
+            restored_table.canonical().unwrap().render(),
+            source_table.canonical().unwrap().render()
+        );
+
+        let mut damaged = fs::read(dir.join(PROVENANCE)).unwrap();
+        if let Some(byte) = damaged.last_mut() {
+            *byte ^= 1;
+        }
+        fs::write(dir.join(PROVENANCE), damaged).unwrap();
+        assert!(matches!(
+            read_provenance(&dir, &catalog),
+            Err(BatchError::CorruptSnapshot { .. })
+        ));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

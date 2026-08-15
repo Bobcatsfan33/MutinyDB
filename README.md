@@ -13,18 +13,19 @@ receipts and compensation required to address them.
 
 **Not approved for production. Not a software release candidate.**
 
-The consolidation is in its **M0 reset**. The complete source of all four components is now present
+The consolidation has entered **M1 bridge development**. The complete source of all four components is present
 under `components/`, pinned to exact commits and trees by [`components.lock.json`](components.lock.json).
-Presence is not admission: every component is quarantined until its exact release and composed
-product gates pass. There is still no Delta Bridge, mounted trust plane, semantic circuit operator,
-or supported `mutinyd` binary.
+Presence and development linkage are not release admission: every component remains quarantined
+until its exact release and composed product gates pass. `mutiny-bridge` now implements the first
+real substrate/Loom/Schweep seam and its local M1 gates; there is still no mounted trust plane,
+semantic circuit operator, supported `mutinyd` binary, or production approval.
 
 | Component | Product role | Imported state | Admission |
 | --- | --- | --- | --- |
 | substrate | storage | `substrate-v1.6.0` | quarantined pending compatibility |
 | LoomDB | trust, branches, provenance, policy, action gateway | `loomdb-v0.5.1` | quarantined pending mounted-oracle gates |
 | PrismDB | semantic event parts, generations, exact/approximate search | unreleased snapshot `296e804` | blocked on a release and composed oracle |
-| Schweep | incremental circuits, epochs, standing answers | unreleased snapshot `c4b6268`; C10 complete | blocked on C11–C13 and `schweep-v0.1` |
+| Schweep | incremental circuits, epochs, standing answers | exact unreleased snapshot `220bf6b`; C11–C13 implementation complete | blocked on the remaining scheduled-night evidence, `current-v0.1`, and composed release admission |
 
 This distinction is enforced, not editorial. `scripts/verify_component_lock.py` recomputes the
 indexed tree of every import and refuses an unreleased or blocked component marked admitted.
@@ -49,15 +50,16 @@ The binding details are in [`CONSOLIDATION-ROADMAP.md`](CONSOLIDATION-ROADMAP.md
 [`docs/decisions`](docs/decisions). [MD-6](docs/decisions/MD-6.md) executes the one-repository product
 topology while preserving exact source provenance and release admission.
 
-## What must be green before M1
+## Current M1 gates
 
 1. Every imported tree matches `components.lock.json`.
-2. The imported LoomDB snapshot is rebased from its untagged substrate revision to the released
-   monorepo substrate tree, with all supported Loom gates green.
-3. Schweep completes C11–C13 and produces `schweep-v0.1` under its own gates.
-4. The root compatibility workflow builds the supported component configurations without using a
-   quarantined component in a product binary.
-5. The M0 charter and decision records remain green.
+2. `mutiny-bridge` maps one storage commit to one compute epoch, requires a real Loom envelope,
+   stores the capture in the same substrate transaction, audits physical pages against captured
+   logical changes, and survives the storage-to-compute gap plus every append/seal crash seam.
+3. The randomized differential gate remains byte-identical to an independent direct-ingest control.
+4. Schweep produces `current-v0.1` after seven qualifying scheduled nights. Development uses the
+   exact merged C13 snapshot; no product release may treat that snapshot as admitted.
+5. Root compatibility, M0 charter, and component provenance gates remain green.
 
 ## Run the current gates
 
@@ -71,6 +73,9 @@ cargo test --workspace --all-features --locked
 The nested component workflows are retained as import provenance; root workflows own the composed
 product result. No performance, security, availability, or enterprise-approval claim is inherited
 merely because a component repository made one about itself.
+
+The implemented write/recovery boundary and its bounded-transaction rule are documented in
+[`docs/M1-BRIDGE.md`](docs/M1-BRIDGE.md).
 
 Private during consolidation. Apache-2.0 when the product's M8 release and professional naming
 clearance gates say otherwise.

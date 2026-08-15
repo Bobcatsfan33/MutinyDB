@@ -163,6 +163,21 @@ impl Client {
         self.request("POST", &format!("/txn?source={source}"), &body)
     }
 
+    /// Retract all current contributions from a source, optionally scoped by table and WHERE predicate.
+    pub fn retract_source(
+        &self,
+        source: &str,
+        table: Option<&str>,
+        predicate: Option<&str>,
+    ) -> std::io::Result<Response> {
+        let mut target = format!("/retract-source?source={}", encode_query(source));
+        if let Some(table) = table {
+            target.push_str("&table=");
+            target.push_str(&encode_query(table));
+        }
+        self.request("POST", &target, predicate.unwrap_or_default().as_bytes())
+    }
+
     pub fn register(&self, sql: &str) -> std::io::Result<Response> {
         self.request("POST", "/register", sql.as_bytes())
     }

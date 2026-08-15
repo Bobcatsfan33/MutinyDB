@@ -106,6 +106,7 @@ impl ServerError {
             // the server cannot satisfy it as asked.
             ServerError::Quarantined { .. }
             | ServerError::TokenTooOld { .. }
+            | ServerError::Batch(schweep_batch::BatchError::ProvenanceUnavailable { .. })
             | ServerError::Log(schweep_log::LogError::TokenReused { .. }) => ErrorKind::Rejected,
             // Everything the dialect refuses is a statement about the request (S-12).
             ServerError::Sql(_) => ErrorKind::Refused,

@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "suite": "schweep-c12-accelerator-spike",
+  "verdict": "GO",
+  "criteria": {
+    "exact_all_warmups_and_measured_executions": true,
+    "gpu_speedup_at_least_2x_at_1m": true,
+    "gpu_speedup_at_least_2x_at_10m": true,
+    "break_even_no_later_than_1m": true,
+    "all_11_paired_rounds_present": true,
+    "committed_real_gpu_toolchain": true
+  },
+  "exact_warmup_pairs": 3,
+  "exact_measured_executions": 66,
+  "break_even_rows": 100000,
+  "rounds": 11,
+  "paired_order": "CPU then GPU on even rounds; GPU then CPU on odd rounds, after one untimed warm-up",
+  "query": "SELECT SUM(t.n) AS total FROM t WHERE t.k > 0",
+  "input": "same checked-in deterministic generator and same little-endian Int64-pair file for both workers",
+  "gpu_sample_includes": "input buffer copy, output allocation, command encoding, dispatch, synchronization, and host partial reduction",
+  "gpu_sample_excludes": "one-time device discovery, runtime shader compilation, pipeline creation, and command-queue creation",
+  "gpu_setup_nanos": 74897583,
+  "machine": {
+    "platform": "macOS-15.7.4-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "processor": "arm",
+    "logical_cpus": 8,
+    "metal_device": "Apple M2",
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "clang": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "python": "3.14.6"
+  },
+  "source_commit": "a29e4863f9846ea8b4a298dc99e220aec88dad13",
+  "measurements": [
+    {
+      "rows": 100000,
+      "result": -1245,
+      "cpu": {
+        "raw_nanos": [
+          28519625,
+          25556792,
+          29392667,
+          28310291,
+          30340958,
+          28394458,
+          29926584,
+          28806875,
+          27099916,
+          26569084,
+          30173708
+        ],
+        "median_nanos": 28519625,
+        "fastest_nanos": 25556792,
+        "slowest_nanos": 30340958
+      },
+      "gpu": {
+        "raw_nanos": [
+          626084,
+          431292,
+          779083,
+          500958,
+          581917,
+          433417,
+          502500,
+          427583,
+          541541,
+          1295958,
+          498417
+        ],
+        "median_nanos": 502500,
+        "fastest_nanos": 427583,
+        "slowest_nanos": 1295958
+      },
+      "median_gpu_speedup": 56.755473
+    },
+    {
+      "rows": 1000000,
+      "result": -1344,
+      "cpu": {
+        "raw_nanos": [
+          307665542,
+          311505417,
+          299069417,
+          301561208,
+          304244667,
+          332081292,
+          298943792,
+          307503667,
+          296557416,
+          310032500,
+          300333292
+        ],
+        "median_nanos": 304244667,
+        "fastest_nanos": 296557416,
+        "slowest_nanos": 332081292
+      },
+      "gpu": {
+        "raw_nanos": [
+          2453958,
+          6125083,
+          4712833,
+          6661166,
+          3111167,
+          3386292,
+          2912959,
+          3060583,
+          3809500,
+          3664041,
+          2643875
+        ],
+        "median_nanos": 3386292,
+        "fastest_nanos": 2453958,
+        "slowest_nanos": 6661166
+      },
+      "median_gpu_speedup": 89.845963
+    },
+    {
+      "rows": 10000000,
+      "result": -602,
+      "cpu": {
+        "raw_nanos": [
+          3914407792,
+          3836707666,
+          4053387625,
+          3887778708,
+          3829984709,
+          4052500834,
+          3916997542,
+          3780543458,
+          4365829958,
+          3942228084,
+          3835748708
+        ],
+        "median_nanos": 3914407792,
+        "fastest_nanos": 3780543458,
+        "slowest_nanos": 4365829958
+      },
+      "gpu": {
+        "raw_nanos": [
+          45725500,
+          28499625,
+          45528375,
+          37779917,
+          47661458,
+          28990500,
+          48505875,
+          44686875,
+          46215083,
+          27172792,
+          46183000
+        ],
+        "median_nanos": 45528375,
+        "fastest_nanos": 27172792,
+        "slowest_nanos": 48505875
+      },
+      "median_gpu_speedup": 85.977323
+    }
+  ],
+  "scope": "C12 evidence only; no GPU production code, dependency, feature, or API ships"
+}

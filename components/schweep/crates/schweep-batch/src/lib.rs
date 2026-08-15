@@ -32,9 +32,11 @@ pub mod error;
 pub mod hydrate;
 pub mod oneshot;
 pub mod snapshot;
+pub mod source;
 
 pub use compact::{compact, snapshot_dir, Compacted};
 pub use error::{BatchError, Result};
 pub use hydrate::{accumulated, accumulated_upto, as_one_delta, one_delta_for};
 pub use oneshot::{answer, answer_over_integrals, answer_over_log, answer_sql};
 pub use snapshot::Manifest;
+pub use source::{source_integral, source_integrals_upto, SourceIntegrals};

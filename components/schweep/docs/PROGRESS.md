@@ -15,8 +15,10 @@ that proves it is a violation of I-10, so every row below points at something ru
 | **C7** — one-shot queries, Parquet ground truth, compaction | **complete; exit gate green in CI** |
 | **C8** — state spill and cold-start honesty | **complete; exit gate green in CI; D-18 amended additively by D-25** |
 | **C9** — `schweepd`: the server | **complete; exit gate green in CI; the real `kill -9` now exists** |
-| **C10** — performance | **implementation complete; required CI checks are the exit gate** |
-| C11 … C13 | not started |
+| **C10** — performance | complete; repository CI green |
+| **C11** — source-scoped retraction | **complete; exit gate green in CI** |
+| **C12** — accelerator spike | **complete; exit gate green in CI** |
+| **C13** — hardening and v0.1 freeze | **implementation in progress; release blocked at 4/7 qualifying nights** |
 
 > **Correction, made in the rename session (2026-08-11).** This table read `C5 … C13 | not started`
 > while C5, C6, C7 and C8 were each complete with a green gate and a full section below. Four sprints'
@@ -1821,4 +1823,107 @@ generator. The gate proves all SQL strings are distinct, shared and private memo
 the shared memo holds less than half the nodes of the private one. A canonicalization regression that
 silently stops sharing therefore moves a correctness-independent assertion.
 
-C11 is the next sprint and is not started in this session, preserving the one-sprint rule.
+C11 follows below.
+
+---
+
+## C11 — source-scoped retraction and the lineage hook (COMPLETE; EXIT GATE GREEN IN CI)
+
+C11 makes `source_id` operational rather than decorative. A source's current net contribution is
+reconstructed from an authenticated snapshot-v2 `PROVENANCE` ledger plus the retained log, optionally
+filtered by the same bound scalar expression used for SQL `WHERE`, negated, and appended through the
+ordinary ingest/seal path under the same source identity. No operator, memo, result store, subscription,
+or recovery path has a special deletion mode.
+
+### The exit gate
+
+| Gate | Evidence | Result |
+| --- | --- | --- |
+| Retract-source equals replay with that source absent | `c11_source_retraction::retract_source_matches_world_without_source_over_seeded_join_and_aggregate_suite` | 128 deterministic source histories; filter/project, join, aggregate, and join→aggregate answers compared to the naïve oracle |
+| The seam crosses shared circuitry | same gate | four simultaneous standing registrations in one sharing-enabled memo; every registration remains live after retraction and restart |
+| Compaction preserves ownership | every eighth seeded case plus `source_provenance_round_trips_and_is_manifest_authenticated` | provenance is consolidated at the anchor, whole-file checksummed in MANIFEST, reloaded, retracted, and recovered |
+| Predicate semantics do not drift | `predicate_retraction_matches_where_and_does_not_advance_on_retry`; network endpoint test | the existing SQL binder and evaluator decide the predicate; only TRUE matches |
+| Retry is idempotent | both predicate tests | the generated negative transaction retains the source id; a repeat sees net zero and creates no epoch |
+| Public contract works over the socket | `source_retraction_is_predicate_scoped_and_idempotent_over_the_wire` | scoped recall, receipt, answer update, retry, and full-source recall |
+
+### Format and failure rules
+
+D-27 records the snapshot-v2 format and the same-source negative transaction. Snapshot v1 remains valid
+for reads. If it represents a discarded prefix, source reconstruction returns
+`ProvenanceUnavailable` instead of attributing rows heuristically. A damaged `PROVENANCE` ledger fails its
+manifest checksum and prevents use.
+
+### What C11 does not prove
+
+- The generated retraction must currently fit the existing per-source pending admission bounds. Large
+  recalls need resumable chunk planning and progress receipts in the composed MutinyDB fleet plane.
+- The lineage key is source-level. Column/cell derivation graphs and an audit narrative are MutinyDB M4,
+  where Loom envelopes supply the evidence graph around this primitive.
+- C11 does not decide the accelerator. C12 is the bounded go/no-go spike; C13 owns the public API freeze,
+  extended soak, Flight decision, and v0.1 release.
+
+---
+
+## C12 — the accelerator spike (IMPLEMENTATION COMPLETE; CI-GATED)
+
+D-28 and `docs/C12_ACCELERATOR_PROTOCOL.md` froze the experiment and verdict before the spike source was
+written. The committed runner compares the current C10 one-shot circuit with one runtime-compiled Metal
+filter/sum kernel over the same deterministic Int64-pair input, at 100,000, 1,000,000, and 10,000,000
+rows. Each size has an untimed warm-up and eleven alternating paired release rounds.
+
+### The exit gate
+
+| Gate | Evidence | Result |
+| --- | --- | --- |
+| Exact results | `testing/evidence/c12-accelerator.json`; `c12_evidence` | three warm-up pairs and 66 measured candidate executions agreed exactly |
+| At least 2.00x at 1M and 10M | same artifact/test | 89.85x and 85.98x median speedup |
+| Break-even no later than 1M | same artifact/test | GPU was faster at the smallest measured size, 100,000 rows |
+| Complete, reproducible receipt | `scripts/run_c12_accelerator.py`; artifact/test | eleven raw CPU and GPU samples per size; machine, toolchains, inclusion boundary, setup cost, and source commit recorded |
+| Production boundary unchanged | workspace build plus source inventory | Metal is a separately compiled evidence worker; no production crate, feature, dependency, or API links it |
+
+### Verdict and boundary
+
+`GO` authorizes a later design phase only. CPU remains the only product execution path. The large speedup
+is an honest comparison between Schweep's general incremental circuit used for one-shot work and a
+single specialized fused kernel; it shows a cold-path specialization opportunity and does not prove SQL
+coverage, fallback, admission, fault handling, NVIDIA/Linux portability, or production correctness.
+
+C13 owns the API/limitations freeze, extended gates, zero-flake audit, Flight decision, and v0.1 tag.
+
+---
+
+## C13 — hardening and v0.1 freeze (IMPLEMENTATION COMPLETE; PASSAGE-OF-TIME GATE PENDING)
+
+C13 freezes the supported surface in `docs/current-api.md`, maps every invariant I-1 through I-10 to a
+separately named CI matrix job, and schedules the order-of-magnitude populations: 44,000 differential
+seeds and 100,000 crash/recover cycles. The ordinary crash gate reads `SCHWEEP_CRASH_CYCLES` but retains
+10,000 as its default, so the larger job exercises the identical harness rather than a fork.
+
+The README limitation list is sourced from open issues #4 through #17. D-29 closes the Flight decision:
+HTTP is the v0.1 transport because it has the socket differential and crash proof, while Flight has no
+committed bottleneck evidence and would add a second server runtime immediately before the freeze. D-30
+records the patch compatibility boundary. Package version is `0.1.0`.
+
+### Hardening evidence
+
+| Gate | Evidence | Result |
+| --- | --- | --- |
+| 10x differential | `c13_extended`; `testing/evidence/c13-extended-hosted.json` | hosted run `31906947809` at merged commit `5de862d`: 44,000 seeds, 204,321 epochs, 248,321 comparisons, 2,101 matching error answers, **zero divergences** |
+| 10x crash | parameterized C4 gate; `testing/evidence/c13-extended-hosted.json` | same hosted run: 100,000 cycles and seeds, 47,109 seam faults, 18,711 byte-boundary faults, all 26 named seams fired, green |
+| I-1…I-10 named | CI `invariants` matrix; `testing/evidence/c13-invariants.json` | ten distinct check names and targeted commands |
+| Tuned-constant ledger | I-10 `evidence` gate | every behavioral constant names an allowlisted committed receipt and matches code |
+| Last 50 pre-C13 CI runs | `testing/evidence/c13-ci-audit.json` | only 36 runs existed through main run `31903930881`: 32 green, four failures, zero unresolved; every failure has a cause, fix, and later green proof |
+| Local zero-flake repeat | C8 smoke; same audit artifact | replaced a machine-dependent 10% RSS fraction after it failed a bounded 39.7 MiB run; three corrected 1.08 GiB repeats green at 0.0050, 0.0074, and 0.0000 RSS/state byte-growth coefficient |
+| Issue-sourced limitations | README and open issues #4…#17 | no undocumented release-candidate limitation found in the C13 pass |
+| Release integrity | `.github/workflows/release.yml`; `scripts/verify_c13_release.py` | tag/version/streak fail closed; locked test/build; metadata, toolchain, commit, tarball checksum published |
+
+### The remaining exit gate
+
+The architecture requires a full week of green nightly soaks. A qualifying night has both the full-sync
+crash job and the server soak green in one scheduled workflow. As of 2026-08-15, five scheduled workflow
+days are green but only four contain both jobs; the August 11 run predates `nightly-soak`. The exact runs
+are in `testing/evidence/c13-nightly-streak.json`.
+
+Therefore `current-v0.1` is not tagged. The release workflow mechanically rejects it until seven unique
+qualifying dates are recorded and the artifact is marked complete. Manually dispatching the workflow can
+prove the extended jobs, but cannot manufacture another calendar night.

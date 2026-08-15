@@ -82,8 +82,10 @@ MD-1's plane-edge matrix remains binding. Only its repository rules change:
 - Component changes after import land here first. During migration, a change needed to close a
   component's own unfinished release gate is also returned to that component repository, released
   there, then re-imported with both the source and current trees recorded.
-- No product binary may link a quarantined component. The component-integrity gate can be green
-  while product admission remains red; those are deliberately different claims.
+- Integration libraries and composed gates may link a quarantined exact tree: that is how its
+  blocker is proven or falsified. No supported product binary or release artifact may link it.
+  The component-integrity gate can be green while product admission remains red; those are
+  deliberately different claims.
 
 ## Consequences
 

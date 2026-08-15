@@ -50,6 +50,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use schweep_differential::Rng;
 use schweep_log::{FaultInjector, Log, SyncPolicy};
@@ -66,6 +67,38 @@ const CYCLES: u64 = 1_000;
 /// The most appends one cycle makes. Bounded so the answer stays small enough to compare cheaply, and so a
 /// cycle that is never killed still terminates.
 const MAX_APPENDS: u64 = 48;
+
+/// Hosted runners vary substantially in scheduling latency. These are elapsed-time safety bounds, not
+/// performance assertions: they only fail when a live process has made no observable progress for the
+/// whole interval. A counter of CPU spin iterations cannot make that distinction.
+const STARTUP_STALL_LIMIT: Duration = Duration::from_secs(30);
+const LOAD_STALL_LIMIT: Duration = Duration::from_secs(60);
+
+/// Detect a lack of workload progress without making the result depend on runner CPU speed.
+struct ProgressWatchdog {
+    last_progress: u64,
+    last_advance: Instant,
+    stall_limit: Duration,
+}
+
+impl ProgressWatchdog {
+    fn new(progress: u64, now: Instant, stall_limit: Duration) -> Self {
+        Self {
+            last_progress: progress,
+            last_advance: now,
+            stall_limit,
+        }
+    }
+
+    /// Return false only after `stall_limit` has elapsed without an advance.
+    fn observe(&mut self, progress: u64, now: Instant) -> bool {
+        if progress != self.last_progress {
+            self.last_progress = progress;
+            self.last_advance = now;
+        }
+        now.duration_since(self.last_advance) < self.stall_limit
+    }
+}
 
 /// A `schweepd` subprocess and the client that reaches it.
 struct Subprocess {
@@ -93,7 +126,7 @@ impl Subprocess {
             .expect("schweepd must be spawnable");
 
         let mut child = child;
-        let mut spins = 0u64;
+        let started = Instant::now();
         loop {
             if let Some(port) = std::fs::read_to_string(&port_file)
                 .ok()
@@ -108,12 +141,11 @@ impl Subprocess {
             if let Ok(Some(status)) = child.try_wait() {
                 panic!("schweepd exited before binding: {status}");
             }
-            spins += 1;
             assert!(
-                spins < 2_000_000,
-                "schweepd never bound a port; something is wrong with the binary, not the timing"
+                started.elapsed() < STARTUP_STALL_LIMIT,
+                "schweepd remained alive but did not bind a port within {STARTUP_STALL_LIMIT:?}"
             );
-            std::hint::spin_loop();
+            std::thread::yield_now();
         }
     }
 
@@ -282,6 +314,18 @@ fn cycles() -> u64 {
         .unwrap_or(CYCLES)
 }
 
+#[test]
+fn progress_watchdog_resets_on_observed_work() {
+    let start = Instant::now();
+    let limit = Duration::from_secs(10);
+    let mut watchdog = ProgressWatchdog::new(0, start, limit);
+
+    assert!(watchdog.observe(0, start + Duration::from_secs(9)));
+    assert!(watchdog.observe(1, start + Duration::from_secs(9)));
+    assert!(watchdog.observe(1, start + Duration::from_secs(18)));
+    assert!(!watchdog.observe(1, start + Duration::from_secs(19)));
+}
+
 /// **The gate.** A real `SIGKILL`, at a thousand points, under concurrent ingest, read and subscribe.
 #[test]
 fn a_killed_schweepd_recovers_exactly_once_and_matches_its_never_crashed_twin() {
@@ -323,14 +367,24 @@ fn a_killed_schweepd_recovers_exactly_once_and_matches_its_never_crashed_twin() 
         // Wait for the workload to reach the kill point by *asking the counter*, not by sleeping. A cycle
         // whose target is 0 is killed immediately, which is a real and interesting position: mid-register,
         // mid-first-append, or before either.
-        let mut spins = 0u64;
-        while load.progress.load(Ordering::SeqCst) < kill_after {
-            spins += 1;
+        let initial_progress = load.progress.load(Ordering::SeqCst);
+        let mut watchdog =
+            ProgressWatchdog::new(initial_progress, Instant::now(), LOAD_STALL_LIMIT);
+        let mut current_progress = initial_progress;
+        while current_progress < kill_after {
+            if let Ok(Some(status)) = server.child.try_wait() {
+                panic!(
+                    "cycle {cycle}: schweepd exited with {status} while waiting for acknowledged append \
+                     {kill_after}; progress stopped at {current_progress}"
+                );
+            }
+            current_progress = load.progress.load(Ordering::SeqCst);
             assert!(
-                spins < 200_000_000,
-                "the load thread stopped making progress"
+                watchdog.observe(current_progress, Instant::now()),
+                "cycle {cycle}: the load made no acknowledged-append progress for \
+                 {LOAD_STALL_LIMIT:?}; target {kill_after}, stopped at {current_progress}"
             );
-            std::hint::spin_loop();
+            std::thread::yield_now();
         }
         server.kill_9();
 

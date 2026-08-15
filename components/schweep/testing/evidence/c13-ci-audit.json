@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "audited_at": "2026-08-15",
+  "cutoff_run_id": 31903930881,
+  "repository": "Bobcatsfan33/schweep",
+  "workflow": "CI",
+  "requested_window": 50,
+  "available_runs": 36,
+  "summary": {
+    "success": 32,
+    "failure": 4,
+    "unresolved_flakes": 0
+  },
+  "scope_note": "All CI workflow runs through the last pre-C13 main run, 31903930881, were audited. The repository had 36 at that cutoff, so no claim is made about 14 runs that did not exist. C13 implementation/proof runs are classified in their pull request and do not retroactively change this historical snapshot.",
+  "failures": [
+    {
+      "run_id": 31900755090,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31900755090",
+      "cause": "The C11 kill-9 test used CPU loop iterations as a timeout and could fail on a slower hosted runner while both processes still made progress.",
+      "classification": "test harness defect",
+      "fix_commit": "d2234c7dec52abd664a24417ce75a19d0fa52136",
+      "fix": "Use a progress-aware 60-second wall-clock watchdog and report child process exits.",
+      "green_proof": "https://github.com/Bobcatsfan33/schweep/actions/runs/31901253330"
+    },
+    {
+      "run_id": 31523881483,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31523881483",
+      "cause": "The memo-ceiling workload retained a diagnostic record for every generated batch and exhausted its cgroup before measuring the engine.",
+      "classification": "test harness defect",
+      "fix_commit": "2bd3151",
+      "fix": "Bound the diagnostic history so the fixed ceiling measures engine state rather than harness logging.",
+      "green_proof": "https://github.com/Bobcatsfan33/schweep/actions/runs/31555922330"
+    },
+    {
+      "run_id": 31448595001,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31448595001",
+      "cause": "A C8 workflow edit produced invalid GitHub Actions YAML, so no jobs could start.",
+      "classification": "workflow defect",
+      "fix_commit": "f769a7b",
+      "fix": "Repair the workflow structure and validate it with a subsequent hosted run.",
+      "green_proof": "https://github.com/Bobcatsfan33/schweep/actions/runs/31459339874"
+    },
+    {
+      "run_id": 31346551118,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31346551118",
+      "cause": "Ubuntu AppArmor denied the unprivileged user namespace used by the no-network proof.",
+      "classification": "runner compatibility defect",
+      "fix_commit": "d7696bd",
+      "fix": "Detect the restriction, enable unprivileged namespaces on the disposable runner, then prove outbound network denial and loopback availability.",
+      "green_proof": "https://github.com/Bobcatsfan33/schweep/actions/runs/31459339874"
+    }
+  ],
+  "local_hardening_findings": [
+    {
+      "finding": "The uncapped C8 smoke test used a fixed 10% fractional RSS-growth threshold. Repeated bounded runs peaked at only 41-46 MiB against a 96 MiB budget while 1.08 GiB of state remained on disk, but allocator/cache convergence moved the quartile percentage from -3.6% to +22.5%.",
+      "classification": "machine-dependent test instrument defect",
+      "fix": "Observe the full 1 GiB receipt population and assert the leak-sensitive properties directly: absolute RSS budget plus positive RSS-byte growth no greater than 5% of state-byte growth. Answers, backend entry counts, reconciliation, and the fixed 128 MiB cgroup gate are unchanged.",
+      "verification": "Three consecutive corrected 1.08 GiB local runs passed with RSS/state byte-growth coefficients 0.0050, 0.0074, and 0.0000. Hosted fixed-cgroup proof is required on the C13 pull request."
+    }
+  ]
+}
