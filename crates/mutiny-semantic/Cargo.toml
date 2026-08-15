@@ -1,0 +1,19 @@
+[package]
+name = "mutiny-semantic"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Generation-pinned bounded incremental semantic operators for MutinyDB."
+
+[dependencies]
+prism-types.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+prism-engine = { path = "../../components/prismdb/crates/prism-engine" }
+prism-part = { path = "../../components/prismdb/crates/prism-part" }
+prism-quantizer = { path = "../../components/prismdb/crates/prism-quantizer" }
+tempfile = "3"
+
+[lints]
+workspace = true
