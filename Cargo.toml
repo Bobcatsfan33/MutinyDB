@@ -26,7 +26,7 @@
 # Nothing may be added ahead of its phase. (§6: "no phase starts before its named gates".)
 [workspace]
 resolver = "3"
-members = ["crates/mutiny-charter", "crates/mutiny-bridge"]
+members = ["crates/mutiny-charter", "crates/mutiny-bridge", "crates/mutiny-semantic"]
 exclude = [
     "components/loomdb",
     "components/prismdb",
@@ -40,6 +40,7 @@ exclude = [
 blake3 = "1.5"
 bincode = "1.3"
 loom-core = { path = "components/loomdb/crates/loom-core" }
+prism-types = { path = "components/prismdb/crates/prism-types" }
 schweep-log = { path = "components/schweep/crates/schweep-log" }
 schweep-zset = { path = "components/schweep/crates/schweep-zset" }
 serde = { version = "1", features = ["derive"] }

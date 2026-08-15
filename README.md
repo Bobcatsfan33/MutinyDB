@@ -13,12 +13,13 @@ receipts and compensation required to address them.
 
 **Not approved for production. Not a software release candidate.**
 
-The consolidation has entered **M1 bridge development**. The complete source of all four components is present
+The consolidation has completed **M1** and entered **M2 semantic-operator development**. The complete source of all four components is present
 under `components/`, pinned to exact commits and trees by [`components.lock.json`](components.lock.json).
 Presence and development linkage are not release admission: every component remains quarantined
 until its exact release and composed product gates pass. `mutiny-bridge` now implements the first
-real substrate/Loom/Schweep seam and its local M1 gates; there is still no mounted trust plane,
-semantic circuit operator, supported `mutinyd` binary, or production approval.
+real substrate/Loom/Schweep seam. `mutiny-semantic` now provides the first generation-pinned,
+bounded incremental top-k operator and exact PrismDB oracle gate; semantic grouping, a mounted
+trust plane, a supported `mutinyd` binary, and production approval remain open.
 
 | Component | Product role | Imported state | Admission |
 | --- | --- | --- | --- |
