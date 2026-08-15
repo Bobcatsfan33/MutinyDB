@@ -1,0 +1,9 @@
+# key|body|tenant|event_time|cost_micros|error
+evt-001|urgent database breach investigation|acme|1001|12000000|true
+evt-002|routine database backup complete|acme|1002|3000000|false
+evt-003|urgent identity token replay detected|acme|1003|7000000|true
+evt-004|database query latency routine|acme|1004|5000000|false
+evt-005|security control exception urgent|other|1005|9000000|true
+evt-006|database security control alert|acme|1006|11000000|true
+evt-007|routine user authentication success|acme|1007|1000000|false
+evt-008|urgent database credential compromise|acme|1008|15000000|true

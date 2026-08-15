@@ -13,13 +13,14 @@ receipts and compensation required to address them.
 
 **Not approved for production. Not a software release candidate.**
 
-The consolidation has completed **M1** and entered **M2 semantic-operator development**. The complete source of all four components is present
+The consolidation has completed **M1** and the composed **M2 semantic path**. The complete source of all four components is present
 under `components/`, pinned to exact commits and trees by [`components.lock.json`](components.lock.json).
 Presence and development linkage are not release admission: every component remains quarantined
 until its exact release and composed product gates pass. `mutiny-bridge` now implements the first
-real substrate/Loom/Schweep seam. `mutiny-semantic` now provides the first generation-pinned,
-bounded incremental top-k operator and exact PrismDB oracle gate; semantic grouping, a mounted
-trust plane, a supported `mutinyd` binary, and production approval remain open.
+real substrate/Loom/Schweep seam. `mutiny-semantic` now provides generation-pinned bridge
+embedding, bounded incremental top-k and mergeable grouping, dual-generation cutover, cold one-shot
+routing, and exact PrismDB oracle gates. A mounted trust plane, a supported `mutinyd` binary, fleet
+operation, external assurance, and production approval remain open.
 
 | Component | Product role | Imported state | Admission |
 | --- | --- | --- | --- |
@@ -51,7 +52,7 @@ The binding details are in [`CONSOLIDATION-ROADMAP.md`](CONSOLIDATION-ROADMAP.md
 [`docs/decisions`](docs/decisions). [MD-6](docs/decisions/MD-6.md) executes the one-repository product
 topology while preserving exact source provenance and release admission.
 
-## Current M1 gates
+## Current composed gates
 
 1. Every imported tree matches `components.lock.json`.
 2. `mutiny-bridge` maps one storage commit to one compute epoch, requires a real Loom envelope,
@@ -61,6 +62,8 @@ topology while preserving exact source provenance and release admission.
 4. Schweep produces `current-v0.1` after seven qualifying scheduled nights. Development uses the
    exact merged C13 snapshot; no product release may treat that snapshot as admitted.
 5. Root compatibility, M0 charter, and component provenance gates remain green.
+6. M2's frozen hybrid corpus traverses bridge embedding, incremental top-k, semantic grouping,
+   dual-generation cutover, and cold routing; real Prism exact and rerank answers match bit-for-bit.
 
 ## Run the current gates
 

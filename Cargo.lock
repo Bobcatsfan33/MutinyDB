@@ -630,10 +630,12 @@ version = "0.0.0"
 name = "mutiny-semantic"
 version = "0.1.0"
 dependencies = [
+ "mutiny-bridge",
  "prism-engine",
  "prism-part",
  "prism-quantizer",
  "prism-types",
+ "schweep-zset",
  "tempfile",
  "thiserror",
 ]
