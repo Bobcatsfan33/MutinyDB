@@ -1,0 +1,84 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/schweep-zset",
+    "crates/schweep-plan",
+    "crates/schweep-state",
+    "crates/schweep-log",
+    "crates/schweep-oracle",
+    "crates/schweep-ops",
+    "crates/schweep-circuit",
+    "crates/schweep-sql",
+    "crates/schweep-memo",
+    "crates/schweep-batch",
+    "crates/schweep-server",
+    "testing/bench",
+    "testing/differential",
+    "testing/crash",
+    "testing/soak",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/Bobcatsfan33/schweep"
+publish = false
+
+[workspace.dependencies]
+schweep-zset = { path = "crates/schweep-zset" }
+schweep-plan = { path = "crates/schweep-plan" }
+schweep-state = { path = "crates/schweep-state" }
+schweep-log = { path = "crates/schweep-log" }
+schweep-differential = { path = "testing/differential" }
+schweep-bench = { path = "testing/bench" }
+schweep-soak = { path = "testing/soak" }
+schweep-crash = { path = "testing/crash" }
+schweep-oracle = { path = "crates/schweep-oracle" }
+schweep-ops = { path = "crates/schweep-ops" }
+schweep-circuit = { path = "crates/schweep-circuit" }
+schweep-sql = { path = "crates/schweep-sql" }
+schweep-memo = { path = "crates/schweep-memo" }
+schweep-batch = { path = "crates/schweep-batch" }
+schweep-server = { path = "crates/schweep-server" }
+
+arrow-array = { version = "59", default-features = false }
+arrow-buffer = { version = "59", default-features = false }
+arrow-schema = { version = "59", default-features = false }
+# Parquet is the ground-truth snapshot format (§6 C7). Pinned to the same major as arrow-*: the two
+# share `arrow-array`/`arrow-schema` types, and a mismatch is a type error rather than a runtime
+# surprise, which is the point of pinning both.
+parquet = { version = "59", default-features = false, features = ["arrow"] }
+# The durable state backend (D-19, amending D-5). Pure Rust, single-writer ACID, B-tree — chosen for
+# maturity behind a frozen trait and because the prefix-scan access pattern favours a B-tree.
+redb = { version = "4", default-features = false }
+thiserror = { version = "2", default-features = false, features = ["std"] }
+# The parser, and only the parser: sqlparser produces an AST, and the binder decides what any of
+# it means. A construct parsing is never a reason to support it (S-35).
+sqlparser = { version = "0.62", default-features = false, features = ["std"] }
+
+proptest = { version = "1", default-features = false, features = ["std"] }
+rand_core = { version = "0.10", default-features = false }
+rand_chacha = { version = "0.10", default-features = false }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# ARCHITECTURE.md §10: no unwrap/expect/panic in library code. Denied at the workspace
+# level and re-allowed only inside `#[cfg(test)]` modules and test binaries, where
+# panicking IS the assertion mechanism.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+# Hidden panic sources: an out-of-bounds index is a panic wearing a `[]`.
+indexing_slicing = "deny"
+# "If a test is skipped 'for now,' the sprint is not done" (§10) — the same goes for code.
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+[profile.test]
+opt-level = 1

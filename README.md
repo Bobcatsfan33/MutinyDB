@@ -1,61 +1,76 @@
 # MutinyDB
 
-**Private.** The consolidation of **Current** (compute), **LoomDB** (trust) and **PrismDB**
-(semantic) on **substrate** (storage), into one agent-native enterprise database.
+**One database for continuously correct, provenance-aware agent state.** MutinyDB consolidates
+Schweep's incremental compute, LoomDB's trust and branch model, PrismDB's semantic event tier, and
+substrate's durable storage into one supported product and one source repository.
 
-`CONSOLIDATION-ROADMAP.md` is the document of record: the four planes, the three keystone
-unifications (commit-as-delta, taint-as-retraction, forked standing state), the phases M0–M8 and
-their exit gates. Read it before anything here.
+MutinyDB's defining operation is source recall: a write records what it derived from; every commit
+becomes one compute epoch; `taint(source)` retracts that source through all standing computations;
+reversible answers repair themselves; irreversible external actions remain visible first, with the
+receipts and compensation required to address them.
 
-## Where this is
+## Current product decision
 
-**M0 — charter and contracts.** Complete.
+**Not approved for production. Not a software release candidate.**
 
-| M0 exit condition | State |
-| --- | --- |
-| MD-1…MD-4 merged | [MD-1](docs/decisions/MD-1.md) planes and dependency rules · [MD-2](docs/decisions/MD-2.md) the Delta Bridge contract · [MD-3](docs/decisions/MD-3.md) the unified SQL surface · [MD-4](docs/decisions/MD-4.md) the naming sweep |
-| CI skeleton (fmt / clippy `-D warnings` / test / no-egress) green | `.github/workflows/ci.yml` |
+The consolidation is in its **M0 reset**. The complete source of all four components is now present
+under `components/`, pinned to exact commits and trees by [`components.lock.json`](components.lock.json).
+Presence is not admission: every component is quarantined until its exact release and composed
+product gates pass. There is still no Delta Bridge, mounted trust plane, semantic circuit operator,
+or supported `mutinyd` binary.
 
-**M1 has not started, and cannot.** Its trigger is the engine tagging **`schweep-v0.1`** at its C13
-freeze — a *release* to pin, not a sprint to finish (§6 admits siblings by tag only; MD-2 states the
-trigger, MD-4's addendum the rename). Nothing in this repository builds a bridge, an operator, or a
-mounted plane; the workspace holds one crate, `mutiny-charter`, which contains no engine code — it
-is the M0 gate expressed as a test.
+| Component | Product role | Imported state | Admission |
+| --- | --- | --- | --- |
+| substrate | storage | `substrate-v1.6.0` | quarantined pending compatibility |
+| LoomDB | trust, branches, provenance, policy, action gateway | `loomdb-v0.5.1` | quarantined pending mounted-oracle gates |
+| PrismDB | semantic event parts, generations, exact/approximate search | unreleased snapshot `296e804` | blocked on a release and composed oracle |
+| Schweep | incremental circuits, epochs, standing answers | unreleased snapshot `c4b6268`; C10 complete | blocked on C11–C13 and `schweep-v0.1` |
 
-The engine is still named **Current** until its own D-21 lands. This repository's references to it
-are rewritten **once, at M1 open**, against the renamed engine — a deliberate deferral, recorded in
-MD-4's addendum, and M1's first task.
+This distinction is enforced, not editorial. `scripts/verify_component_lock.py` recomputes the
+indexed tree of every import and refuses an unreleased or blocked component marked admitted.
 
-Loom v0.3 and Prism S12 continue on their own roadmaps, unchanged. Nothing here pauses them, and
-nothing in any sibling repository may depend on this one (§6, MD-1 R4).
+## Architecture
 
-## Layout
+The product has five planes with directed dependencies:
 
+```text
+fleet/ops -> trust -> compute -> semantic -> storage
+                         |                     ^
+                         +---- bridge ----------+
 ```
-CONSOLIDATION-ROADMAP.md    the document of record — phases, gates, risks
-docs/decisions/             MD-#: binding decision records, options weighed
-crates/mutiny-charter/      the M0 gate: the records are present, well-formed, accepted
-.github/workflows/ci.yml    fmt · clippy -D warnings · test · no-egress
-```
 
-## Running the gate
+- **Trust:** branches, envelopes, provenance, claims, policy, and propose-not-execute actions.
+- **Compute:** DBSP-style standing query circuits and shared subplans.
+- **Semantic:** bounded semantic operators in compute plus Prism's immutable cold/scan tier.
+- **Storage:** substrate commits, pages, WAL, snapshots, and forks.
+- **Fleet/ops:** tenant pools, registry, sleep/wake, resource governance, and deployment controls.
+
+The binding details are in [`CONSOLIDATION-ROADMAP.md`](CONSOLIDATION-ROADMAP.md) and
+[`docs/decisions`](docs/decisions). [MD-6](docs/decisions/MD-6.md) executes the one-repository product
+topology while preserving exact source provenance and release admission.
+
+## What must be green before M1
+
+1. Every imported tree matches `components.lock.json`.
+2. The imported LoomDB snapshot is rebased from its untagged substrate revision to the released
+   monorepo substrate tree, with all supported Loom gates green.
+3. Schweep completes C11–C13 and produces `schweep-v0.1` under its own gates.
+4. The root compatibility workflow builds the supported component configurations without using a
+   quarantined component in a product binary.
+5. The M0 charter and decision records remain green.
+
+## Run the current gates
 
 ```sh
+python3 scripts/verify_component_lock.py
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test  --workspace --all-features --locked
+cargo test --workspace --all-features --locked
 ```
 
-## House rules, inherited
+The nested component workflows are retained as import provenance; root workflows own the composed
+product result. No performance, security, availability, or enterprise-approval claim is inherited
+merely because a component repository made one about itself.
 
-The invariants of the four planes are not restated here; they are enforced where they live. What
-this repository adopts from day one, before it has code to break them with:
-
-- **Nothing is skipped "for now."** A disabled test means the phase is not done.
-- **No phase starts before its named gates** (§6, R-4). M1 needs C4-by-tag; M2 needs C5–C6; M4 needs
-  M1 + M3 + C11.
-- **Siblings by pinned tag, never by path, never by fork** (MD-1 R3).
-- **Honesty.** No performance number without a committed reproducible artifact; every known weakness
-  written down before someone else finds it.
-
-Apache-2.0 when it goes public. Private until M8 says otherwise.
+Private during consolidation. Apache-2.0 when the product's M8 release and professional naming
+clearance gates say otherwise.

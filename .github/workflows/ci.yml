@@ -1,6 +1,7 @@
 name: CI
 
-# The M0 skeleton: fmt, clippy -D warnings, test, no-egress (CONSOLIDATION-ROADMAP.md §4 M0).
+# The M0 skeleton: component integrity, fmt, clippy -D warnings, test, no-egress
+# (CONSOLIDATION-ROADMAP.md §4 M0, as superseded by MD-6).
 #
 # It is wired before there is any engine code to run through it, so that M1's first commit inherits
 # a gate that is already red-if-broken rather than one written afterwards to fit whatever it built.
@@ -15,7 +16,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    # 04:23 UTC. An odd minute on purpose, and a different one from Current's 03:17, so the two
+    # 04:23 UTC. An odd minute on purpose, and a different one from Schweep's 03:17, so the two
     # repositories' nightlies do not queue behind each other on the same shared runners.
     - cron: "23 4 * * *"
 
@@ -32,12 +33,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  component-integrity:
+    name: exact component imports and honest admission
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - run: python3 scripts/verify_component_lock.py
+
+  component-compatibility:
+    name: component compatibility (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [substrate, loomdb, prismdb, schweep]
+    defaults:
+      run:
+        working-directory: components/${{ matrix.component }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: components/${{ matrix.component }} -> target
+      # Quarantine prevents product linkage; it does not excuse source incompatibility. Every
+      # imported workspace must resolve from its lock and compile in the exact monorepo layout.
+      - name: Check every supported feature profile
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.component }}" = "loomdb" ]; then
+            # Loom intentionally makes `remote` and `airgap` mutually exclusive, so Cargo's
+            # synthetic `--all-features` profile is invalid by design. Exercise its real profiles.
+            cargo check --workspace --all-targets --locked
+            bash scripts/verify_build_flavours.sh
+          else
+            cargo check --workspace --all-targets --all-features --locked
+          fi
+      - name: Clippy every supported default target
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           components: rustfmt
       - run: cargo fmt --all --check
@@ -46,11 +91,11 @@ jobs:
     name: clippy -D warnings
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       # --all-targets so tests are linted too: the workspace forbids unsafe and denies
       # unwrap/expect/panic, and the allowances that re-enable them in tests must be explicit.
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
@@ -59,21 +104,21 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       - run: cargo test --workspace --all-features --locked
       # Again, alone and uncaptured, so the M0 gate's result is legible in the job log rather than
       # buried among the mutation tests that prove it can fail.
-      - name: The M0 charter gate (MD-1…MD-4 present, well-formed, accepted)
+      - name: The M0 charter gate (MD-1…MD-4 and MD-6 present, well-formed, accepted)
         run: cargo test -p mutiny-charter --locked --test m0_gate -- --nocapture
 
   no-egress:
     name: no-egress
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
 
       # The only step permitted to reach the network. Everything after it runs with the network
       # removed, so anything that tries to fetch, phone home, or reach a fixture server fails.
@@ -116,7 +161,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, test, no-egress]
+    needs: [component-integrity, component-compatibility, fmt, clippy, test, no-egress]
     if: always()
     steps:
       - name: Fail if any job did not succeed

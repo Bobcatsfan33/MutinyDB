@@ -2,13 +2,18 @@
 
 **Status:** Accepted
 **Phase:** M0 · **Governs:** every crate in this repository, and every consumption edge to
-`substrate`, `loomdb`, `PrismDB`, and `Current`
+`substrate`, `loomdb`, `PrismDB`, and `Schweep`
 **Roadmap:** `CONSOLIDATION-ROADMAP.md` §2, §4 M0, §6, R-4
+
+> **Partial supersession — 2026-08-14.** [MD-6](MD-6.md) replaces R3, R4, the component
+> baseline, and the multi-repository topology with exact provenance-gated monorepo imports. The
+> plane boundaries, downward-edge matrix, and machine-enforcement decision in this record remain
+> binding.
 
 ## Context
 
 MutinyDB is one product assembled from four codebases with four maturities: substrate (v1.3.0,
-frozen), LoomDB (v0.2 line complete, v0.3 in flight), PrismDB (S12 in flight), and Current (public,
+frozen), LoomDB (v0.2 line complete, v0.3 in flight), PrismDB (S12 in flight), and Schweep (public,
 one day old, no tags, no published crates). §2 names five planes — trust, compute, semantic,
 fleet/ops, storage — and §6 names the failure this record exists to prevent, quoting substrate's
 own docs: *the shared core quietly forking to serve two masters.*
@@ -99,7 +104,7 @@ this record makes it enforceable and states what happens when a sibling needs a 
 | Plane | Crate (arrives at) | Owns |
 | --- | --- | --- |
 | Trust | `mutiny-trust` (M3) | Loom's branches, envelopes, policy, action gateway, merge engine, the evidence record |
-| Compute | `mutiny-compute` (M2) | Current's circuits, epochs, memo, result stores — *and every semantic operator* |
+| Compute | `mutiny-compute` (M2) | Schweep's circuits, epochs, memo, result stores — *and every semantic operator* |
 | Semantic | `mutiny-semantic` (M2) | Prism's meaning-clustered parts, centroid index, PQ scan, embedding generations — as a **tier**, not a peer |
 | Fleet/ops | `mutiny-fleet` (M7) | per-tenant pools, registry, sleep/wake, wake-on-delta |
 | Storage | substrate v1.3.0 (external, frozen) | content-addressed pages, O(1) fork, WAL, sleep/wake, the commit stream |
@@ -123,15 +128,15 @@ without going through a circuit. This is what keeps one answer, one plan, one se
   is the case this rule is written for: the registry must know which circuits a delta feeds, and it
   learns it by *observing* an interface compute exports, never by compute calling the registry.
 - **R3 · Siblings by pinned tag, never by path, never by fork.** Every dependency on substrate,
-  loomdb, PrismDB or Current is a versioned or tag-pinned dependency, recorded in
+  loomdb, PrismDB or Schweep is a versioned or tag-pinned dependency, recorded in
   `[workspace.dependencies]`, upgraded by an explicit commit. A `path = "../..."` dependency on a
   sibling repository is a CI failure. When MutinyDB needs a change in a sibling, the change is made
   in the sibling, released under its own gates, and consumed here at the new tag — the sibling's
   roadmap is never amended to suit this repository (§6: Loom v0.3 and Prism S12 continue unchanged).
 - **R4 · Nothing in any sibling may depend on MutinyDB.** §6, verbatim. The arrow out of this
-  repository does not exist. Current's `ARCHITECTURE.md` already builds to this rule — its
+  repository does not exist. Schweep's `ARCHITECTURE.md` already builds to this rule — its
   **[MutinyDB seam]** notes are interfaces, never imports — and MD-2 is written to consume those
-  seams as they are, or to name the change Current must make on its own track and under its own
+  seams as they are, or to name the change Schweep must make on its own track and under its own
   gate.
 
 ### Enforcement

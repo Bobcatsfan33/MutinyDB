@@ -1,0 +1,786 @@
+//! Merge, re-embed, rollback (Part III §13).
+//!
+//! One mechanism does compaction, deduplication, and model migration, because
+//! they are the same operation: read immutable parts, write a new immutable
+//! part, swap the catalog. Nothing is edited. Nothing is deleted. The old parts
+//! are still sitting there, byte-identical, until GC is *separately* asked to
+//! reclaim them — which is why rollback is a catalog write and not a restore.
+//!
+//! S0 merges everything into one part per generation. Size-tiered selection
+//! with I/O and write-amplification budgets is S10; what matters now is that
+//! the *shape* is right, so S10 changes the policy and not the invariants.
+
+use crate::engine::Engine;
+use prism_part::catalog::PartEntry;
+use prism_part::generation::Generation;
+use prism_part::part::{PartSpec, PartWriter, RowIn};
+use prism_part::partition::{PartRef, PartitionKey};
+use prism_quantizer::{CoarseCodebook, PqCodebook};
+use prism_types::error::{PrismError, Result};
+use prism_types::event::Event;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MergeReport {
+    pub parts_in: usize,
+    pub parts_out: usize,
+    pub rows_in: usize,
+    pub rows_out: usize,
+    /// Rows dropped because a newer row carried the same `event_id`.
+    pub duplicates_reconciled: usize,
+    /// Parts that were rewritten out of an older storage format. A merge is how
+    /// a store is migrated forward; nothing is ever rewritten in place.
+    pub parts_migrated: usize,
+    pub bytes_read: usize,
+    pub bytes_written: usize,
+    /// bytes written / bytes read. The number that decides whether merge
+    /// capacity can stay ahead of ingest, which is budgeted, never assumed.
+    pub write_amplification: f64,
+    pub snapshot_id: String,
+    /// Set when the merge was **refused before it started** because the projected output plus a
+    /// safety margin would not fit in free disk space ([merge contract §3](../../../docs/MERGE-CONTRACT.md)).
+    /// A deferral is normal backpressure, not an error: the store is unchanged, and the merge is
+    /// admitted unaltered on a later cycle once space returns (merge carries no state between
+    /// attempts). The reason names the free bytes and the requirement, so it is auditable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred: Option<String>,
+    /// The scheduler's decision for this cycle — the tiers, the ops, the budgets spent — recorded
+    /// so a human can reproduce *why* it merged what it merged ([merge contract §2](../../../docs/MERGE-CONTRACT.md)).
+    /// Present for the tiered scheduler (`merge_tiered`); `None` for the S0 full-compaction `merge`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<crate::scheduler::MergePlan>,
+    /// Excess parts beyond the ideal tiered shape, after this cycle. Bounded merge debt is the
+    /// soak's steady-state assertion (§8).
+    #[serde(default)]
+    pub merge_debt: usize,
+}
+
+/// Free-space headroom required **beyond** the projected merge output, so a merge never fills the
+/// device to the brim.
+///
+/// **Policy** ([C-3](../../../docs/DECISIONS.md)): a merge admits only if `projected output + this`
+/// fits in free space (merge contract §3). It is a headroom decision, not a measured optimum —
+/// enough that the snapshot commit, the WAL, and concurrent ingest have room to land while a merge
+/// runs, small enough not to refuse merges on a nearly-but-not-quite-full disk that a merge would
+/// actually *relieve*. 64 MiB is the declared headroom. Measurement cannot pick it; it is a
+/// statement about how close to full we are willing to operate.
+pub const MERGE_SAFETY_MARGIN_BYTES: u64 = 64 * 1024 * 1024;
+
+/// How many parts must pile up in a size tier before it is merged.
+///
+/// **Policy** ([C-3](../../../docs/DECISIONS.md)): the size-tiered fan-out (merge contract §2). Too
+/// low and a partition merges constantly (write amplification); too high and part count drifts up
+/// before a merge fires. 4 is the boring middle: a tier holds at most 3 parts in steady state, so
+/// part count per partition is bounded by `~3 × tiers`. The soak gate binds it.
+pub const MERGE_TIER_FANOUT: usize = 4;
+
+/// The row-count ratio between adjacent size tiers.
+///
+/// **Policy** ([C-3](../../../docs/DECISIONS.md)): a part a tier up is this many times bigger.
+/// Equal to the fan-out on purpose — merging a full tier of `FANOUT` parts produces one part that
+/// lands exactly one tier up, so a merged part does not immediately re-trigger its new tier.
+pub const MERGE_TIER_RATIO: usize = 4;
+
+/// The upper row count of tier 0 — the smallest tier, where freshly-ingested batches land.
+///
+/// **Policy** ([C-3](../../../docs/DECISIONS.md)): near a typical ingest batch, so a batch lands in
+/// tier 0 and climbs from there.
+pub const MERGE_TIER_BASE_ROWS: usize = 256;
+
+/// The most rows a single merge cycle will move (the per-cycle I/O budget).
+///
+/// **Policy** ([C-3](../../../docs/DECISIONS.md)): a cycle admits ops until this is spent, then
+/// defers the rest by name, so one cycle can never rewrite the whole store (merge contract §2).
+pub const MERGE_IO_BUDGET_ROWS: usize = 1_000_000;
+
+/// The most merges a single cycle will run (the concurrency budget).
+///
+/// **Policy** ([C-3](../../../docs/DECISIONS.md)): bounds how many partitions a cycle touches;
+/// excess ops are deferred, not dropped.
+pub const MERGE_MAX_OPS: usize = 16;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReembedReport {
+    pub old_generation: String,
+    pub new_generation: String,
+    pub old_model: String,
+    pub new_model: String,
+    pub rows: usize,
+    pub parts_written: usize,
+    pub snapshot_id: String,
+    /// The previous snapshot. Rolling back to it is a catalog write; no data is
+    /// rewritten, and no byte of the old parts was ever touched.
+    pub rollback_to: String,
+}
+
+/// The duplicate policy, stated once so it is never re-decided by accident:
+/// **last write wins by `event_time`; ties break on the content hash.**
+///
+/// The tie-break used to be *"ties go to the later part"* — which is a tie broken on **physical
+/// position**, and charter **C-4** forbids the entire class. It is the same defect as
+/// [D-033](../../../docs/DECISIONS.md): two stores holding identical rows would reconcile the
+/// same duplicate pair differently depending on which part each copy happened to land in, so a
+/// merge's output would depend on the layout of its input rather than on its content.
+///
+/// The content hash is a total order on the *data*. Two events with the same id, the same
+/// `event_time` and the same content hash are byte-identical, so which one wins is not
+/// observable — which is exactly what a tie-break should mean.
+fn supersedes(new: &Event, old: &Event) -> bool {
+    match new.event_time.cmp(&old.event_time) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => new.content_hash() > old.content_hash(),
+    }
+}
+
+impl Engine {
+    pub fn merge(&self, now_ms: i64) -> Result<MergeReport> {
+        let snap = self.snapshot()?;
+        let readers = self.open_parts(&snap)?;
+
+        // A part written in an older format is always worth rewriting, even when
+        // there is nothing to compact: the merge is how a store is *migrated*
+        // forward, and a single-part v1 store must not be stranded on a format
+        // that only the compatibility path can read. Everything the newer format
+        // buys — block-local damage, an explicit feature bitset, a declared
+        // rerank encoding — is only real once the bytes are actually rewritten.
+        // "Needs rewriting forward" is broader than "is an older format version".
+        //
+        // A store that had no key service and later gained one holds parts at the CURRENT version
+        // that still name their tenants — `is_legacy` is false for them, so nothing would ever force
+        // them forward and the names would sit on disk indefinitely, defeating the sealing an
+        // operator just turned on. A part that could carry tokens and does not is therefore
+        // migratable too ([D-096](../../docs/DECISIONS.md)).
+        let seals_tenants = self.tenant_tokenizer()?.is_some();
+        let needs_migration = |r: &prism_part::part::PartReader| {
+            r.is_legacy() || (seals_tenants && !r.has_tenant_tokens())
+        };
+        let has_legacy = readers.iter().any(needs_migration);
+
+        if snap.parts.len() < 2 && !has_legacy {
+            return Ok(MergeReport {
+                parts_in: snap.parts.len(),
+                parts_out: snap.parts.len(),
+                rows_in: 0,
+                rows_out: 0,
+                duplicates_reconciled: 0,
+                parts_migrated: 0,
+                bytes_read: 0,
+                bytes_written: 0,
+                write_amplification: 0.0,
+                snapshot_id: snap.snapshot_id,
+                deferred: None,
+                merge_debt: 0,
+                plan: None,
+            });
+        }
+
+        // --- merge admission (merge contract §3) ---
+        // A merge writes a second copy before it can free the first, so it is refused *before it
+        // starts* unless the projected output plus a safety margin fits in free space. The
+        // projected output is bounded above by the total logical bytes of the inputs (duplicate
+        // reconciliation only ever removes rows). If free space cannot be determined, we do not
+        // block — the write-time ENOSPC guard is the backstop and it degrades gracefully.
+        let input_logical_bytes: u64 = readers
+            .iter()
+            .map(|r| {
+                r.manifest
+                    .columns
+                    .iter()
+                    .map(|c| c.storage.logical_bytes())
+                    .sum::<u64>()
+            })
+            .sum();
+        let required = input_logical_bytes.saturating_add(MERGE_SAFETY_MARGIN_BYTES);
+        if let Some(free) = prism_part::disk::available_bytes(&self.store.parts_dir()) {
+            if free < required {
+                return Ok(MergeReport {
+                    parts_in: snap.parts.len(),
+                    parts_out: snap.parts.len(),
+                    rows_in: 0,
+                    rows_out: 0,
+                    duplicates_reconciled: 0,
+                    parts_migrated: 0,
+                    bytes_read: 0,
+                    bytes_written: 0,
+                    write_amplification: 0.0,
+                    snapshot_id: snap.snapshot_id,
+                    deferred: Some(format!(
+                        "merge deferred: insufficient free space — {free} B free, need ~{required} B \
+                         (projected output {input_logical_bytes} B + {MERGE_SAFETY_MARGIN_BYTES} B margin). \
+                         The store is unchanged; the merge will run once space returns."
+                    )),
+                    merge_debt: 0,
+                    plan: None,
+                });
+            }
+        }
+
+        let migrated = readers.iter().filter(|r| needs_migration(r)).count();
+        let dim = self.store.config.dim;
+
+        let mut bytes_read = 0usize;
+        let mut rows_in = 0usize;
+
+        // Group by **partition**, not merely by generation. A merge that combined two
+        // partitions would undo the isolation the partitioning exists to create: a part
+        // spanning two buckets is a part a query for one tenant has a reason to open on behalf
+        // of another. The generation is part of the partition key, so this subsumes the old
+        // grouping.
+        let scheme = self.store.config.partitions.clone();
+        let mut by_partition: BTreeMap<PartitionKey, BTreeMap<String, RowIn>> = BTreeMap::new();
+        let mut duplicates = 0usize;
+
+        for r in &readers {
+            bytes_read += r
+                .manifest
+                .columns
+                .iter()
+                .map(|c| c.storage.logical_bytes() as usize)
+                .sum::<usize>();
+            let rows = r.read_all()?;
+            rows_in += rows.events.len();
+            let m = r.manifest.pq_m;
+            for i in 0..rows.events.len() {
+                let ev = rows.events[i].clone();
+                // Reconcile tombstones: a deleted row is dropped, not carried forward (merge
+                // contract §6). A full merge reads every part, so any tombstoned id is gone
+                // afterward and the tombstone set is cleared below.
+                if snap.is_tombstoned(&ev.event_id) {
+                    continue;
+                }
+                let key = PartitionKey {
+                    bucket: scheme.bucket_of(&ev.tenant_id),
+                    window: scheme.window_of(ev.event_time),
+                    generation: r.manifest.generation_id.clone(),
+                };
+                let bucket = by_partition.entry(key).or_default();
+                let row = RowIn {
+                    centroid: rows.centroids[i],
+                    code: rows.codes[i * m..(i + 1) * m].to_vec(),
+                    vector: rows.vectors[i * dim..(i + 1) * dim].to_vec(),
+                    event: ev,
+                };
+                match bucket.get(&row.event.event_id) {
+                    Some(existing) if !supersedes(&row.event, &existing.event) => {
+                        duplicates += 1;
+                    }
+                    Some(_) => {
+                        duplicates += 1;
+                        bucket.insert(row.event.event_id.clone(), row);
+                    }
+                    None => {
+                        bucket.insert(row.event.event_id.clone(), row);
+                    }
+                }
+            }
+        }
+
+        let mut new_parts = Vec::new();
+        let mut next_seq = snap.next_seq;
+        let mut rows_out = 0usize;
+        let mut bytes_written = 0usize;
+
+        for (key, bucket) in by_partition {
+            let g = self.catalog().get_generation(&key.generation)?;
+            let rows: Vec<RowIn> = bucket.into_values().collect();
+            rows_out += rows.len();
+
+            // A merge is also how a part is migrated onto a NEW promotion scheme: it rewrites
+            // rows into a fresh part under the store's current `promote` list. Existing parts
+            // are never touched, so both representations coexist -- which is exactly what the
+            // dual-door equivalence test exercises.
+            let spec = PartSpec {
+                tenant_tokenizer: self.tenant_tokenizer()?,
+                partition: Some(key.clone()),
+                promote: self.store.config.promote.clone(),
+                lineage: Default::default(),
+                encryption: None,
+            };
+            let manifest = PartWriter::write(
+                &self.store.parts_dir(),
+                next_seq,
+                &g.generation_id,
+                &g.model_id,
+                &g.model_version,
+                dim,
+                self.store.config.pq_m,
+                self.store.config.block_size,
+                &spec,
+                rows,
+                now_ms,
+            )?;
+            bytes_written += manifest
+                .columns
+                .iter()
+                .map(|c| c.storage.logical_bytes() as usize)
+                .sum::<usize>();
+            new_parts.push(PartEntry::Located(crate::ingest::part_ref(
+                &manifest, &key,
+            )?));
+            next_seq += 1;
+        }
+
+        prism_part::faults::maybe_kill("merge.after_part_before_commit");
+
+        let parts_in = snap.parts.len();
+        let parts_out = new_parts.len();
+        // A full merge read every part and carried no tombstoned row forward, so every tombstone is
+        // now reconciled — clear the set (merge contract §6).
+        let mut meta = prism_part::catalog::SnapshotMeta::of(&snap);
+        meta.tombstones.clear();
+        let new_snap = self.catalog().commit_meta(
+            &snap,
+            new_parts,
+            next_seq,
+            snap.active_generation.clone(),
+            meta,
+            now_ms,
+        )?;
+
+        Ok(MergeReport {
+            parts_in,
+            parts_out,
+            rows_in,
+            rows_out,
+            duplicates_reconciled: duplicates,
+            parts_migrated: migrated,
+            bytes_read,
+            bytes_written,
+            write_amplification: if bytes_read == 0 {
+                0.0
+            } else {
+                bytes_written as f64 / bytes_read as f64
+            },
+            snapshot_id: new_snap.snapshot_id,
+            deferred: None,
+            merge_debt: 0,
+            plan: None,
+        })
+    }
+
+    /// Size-tiered merge (S10) — the scheduler's one cycle.
+    ///
+    /// Unlike [`Engine::merge`], which compacts every part into one per partition, this merges only
+    /// the tiers the scheduler selected ([merge contract §2](../../../docs/MERGE-CONTRACT.md)),
+    /// leaving the rest, so write amplification stays bounded and part count reaches a steady state.
+    /// The returned report carries the scheduler's `plan` (why it chose what it chose) and the merge
+    /// debt after the cycle. A store holding a legacy-format part falls back to the full `merge`,
+    /// which is also how such parts are migrated forward.
+    pub fn merge_tiered(&self, now_ms: i64) -> Result<MergeReport> {
+        let snap = self.snapshot()?;
+        // Legacy parts must always be rewritten; the tiered path only understands Located parts, so
+        // defer to the full compactor when any legacy part is present.
+        let part_refs: Vec<PartRef> = snap
+            .parts
+            .iter()
+            .filter_map(|e| e.located().cloned())
+            .collect();
+        if part_refs.len() != snap.parts.len() {
+            return self.merge(now_ms);
+        }
+
+        let plan = crate::scheduler::plan_merges(&part_refs);
+        if plan.ops.is_empty() {
+            return Ok(MergeReport {
+                parts_in: snap.parts.len(),
+                parts_out: snap.parts.len(),
+                rows_in: 0,
+                rows_out: 0,
+                duplicates_reconciled: 0,
+                parts_migrated: 0,
+                bytes_read: 0,
+                bytes_written: 0,
+                write_amplification: 0.0,
+                snapshot_id: snap.snapshot_id,
+                deferred: None,
+                merge_debt: plan.merge_debt,
+                plan: Some(plan),
+            });
+        }
+
+        // The part_ids this cycle will consume, and the parts it will keep untouched.
+        let consumed: std::collections::BTreeSet<String> = plan
+            .ops
+            .iter()
+            .flat_map(|op| op.part_ids.iter().cloned())
+            .collect();
+
+        let dim = self.store.config.dim;
+        let scheme = self.store.config.partitions.clone();
+        let mut new_parts: Vec<PartEntry> = Vec::new();
+        let mut next_seq = snap.next_seq;
+        let mut bytes_read = 0usize;
+        let mut bytes_written = 0usize;
+        let mut rows_in = 0usize;
+        let mut rows_out = 0usize;
+        let mut duplicates = 0usize;
+
+        for op in &plan.ops {
+            // Reconcile only this op's parts, in one partition.
+            let mut merged: BTreeMap<String, RowIn> = BTreeMap::new();
+            let mut key: Option<PartitionKey> = None;
+            for pid in &op.part_ids {
+                let reader = prism_part::part::PartReader::open(&self.store.part_dir(pid))?;
+                bytes_read += reader
+                    .manifest
+                    .columns
+                    .iter()
+                    .map(|c| c.storage.logical_bytes() as usize)
+                    .sum::<usize>();
+                let rows = reader.read_all()?;
+                rows_in += rows.events.len();
+                let m = reader.manifest.pq_m;
+                for i in 0..rows.events.len() {
+                    let ev = rows.events[i].clone();
+                    // Drop tombstoned rows from the parts this cycle touches (merge contract §6).
+                    // The tombstone set is carried forward, since an untouched part may still hold
+                    // the id; a full merge is what finally clears it.
+                    if snap.is_tombstoned(&ev.event_id) {
+                        continue;
+                    }
+                    if key.is_none() {
+                        key = Some(PartitionKey {
+                            bucket: scheme.bucket_of(&ev.tenant_id),
+                            window: scheme.window_of(ev.event_time),
+                            generation: reader.manifest.generation_id.clone(),
+                        });
+                    }
+                    let row = RowIn {
+                        centroid: rows.centroids[i],
+                        code: rows.codes[i * m..(i + 1) * m].to_vec(),
+                        vector: rows.vectors[i * dim..(i + 1) * dim].to_vec(),
+                        event: ev,
+                    };
+                    match merged.get(&row.event.event_id) {
+                        Some(existing) if !supersedes(&row.event, &existing.event) => {
+                            duplicates += 1;
+                        }
+                        Some(_) => {
+                            duplicates += 1;
+                            merged.insert(row.event.event_id.clone(), row);
+                        }
+                        None => {
+                            merged.insert(row.event.event_id.clone(), row);
+                        }
+                    }
+                }
+            }
+            // Every row in this op was tombstoned: the op's parts are consumed and no output part
+            // is written — a net deletion.
+            let Some(key) = key else { continue };
+            let g = self.catalog().get_generation(&key.generation)?;
+            let rows: Vec<RowIn> = merged.into_values().collect();
+            rows_out += rows.len();
+            let spec = PartSpec {
+                tenant_tokenizer: self.tenant_tokenizer()?,
+                partition: Some(key.clone()),
+                promote: self.store.config.promote.clone(),
+                lineage: Default::default(),
+                encryption: None,
+            };
+            let manifest = PartWriter::write(
+                &self.store.parts_dir(),
+                next_seq,
+                &g.generation_id,
+                &g.model_id,
+                &g.model_version,
+                dim,
+                self.store.config.pq_m,
+                self.store.config.block_size,
+                &spec,
+                rows,
+                now_ms,
+            )?;
+            bytes_written += manifest
+                .columns
+                .iter()
+                .map(|c| c.storage.logical_bytes() as usize)
+                .sum::<usize>();
+            new_parts.push(PartEntry::Located(crate::ingest::part_ref(
+                &manifest, &key,
+            )?));
+            next_seq += 1;
+        }
+
+        prism_part::faults::maybe_kill("merge.after_part_before_commit");
+
+        // The new snapshot keeps every part the cycle did not consume, plus the merged outputs.
+        let mut kept: Vec<PartEntry> = snap
+            .parts
+            .iter()
+            .filter(|e| {
+                e.located()
+                    .map(|r| !consumed.contains(&r.part_id))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+        kept.append(&mut new_parts);
+        let parts_in = snap.parts.len();
+        let parts_out = kept.len();
+        let new_snap = self.catalog().commit(
+            &snap,
+            kept,
+            next_seq,
+            snap.active_generation.clone(),
+            now_ms,
+        )?;
+
+        // Recompute debt on the post-merge shape for the report.
+        let after: Vec<PartRef> = new_snap
+            .parts
+            .iter()
+            .filter_map(|e| e.located().cloned())
+            .collect();
+        let merge_debt = crate::scheduler::plan_merges(&after).merge_debt;
+
+        Ok(MergeReport {
+            parts_in,
+            parts_out,
+            rows_in,
+            rows_out,
+            duplicates_reconciled: duplicates,
+            parts_migrated: 0,
+            bytes_read,
+            bytes_written,
+            write_amplification: if bytes_read == 0 {
+                0.0
+            } else {
+                bytes_written as f64 / bytes_read as f64
+            },
+            snapshot_id: new_snap.snapshot_id,
+            deferred: None,
+            merge_debt,
+            plan: Some(plan),
+        })
+    }
+
+    /// Re-embed every row into a new generation and swap the catalog.
+    ///
+    /// The old parts are untouched and still on disk. If the new generation is
+    /// worse, `rollback` puts the old snapshot back by writing one file. That is
+    /// the payoff for never mutating anything.
+    pub fn reembed(&self, new_version: &str, now_ms: i64) -> Result<ReembedReport> {
+        let snap = self.snapshot()?;
+        let old_gen_id = snap
+            .active_generation
+            .clone()
+            .ok_or_else(|| PrismError::Invalid("nothing to re-embed: store is empty".into()))?;
+        let old_gen = self.catalog().get_generation(&old_gen_id)?;
+
+        let dim = self.store.config.dim;
+        let embedder = self
+            .plane
+            .candidate_embedder(&old_gen.model_id, new_version, dim)?;
+
+        // 1. Re-embed every row under the new model.
+        let readers = self.open_parts(&snap)?;
+        let mut events: Vec<Event> = Vec::new();
+        for r in &readers {
+            events.extend(r.read_all()?.events);
+        }
+        if events.is_empty() {
+            return Err(PrismError::Invalid("nothing to re-embed: no rows".into()));
+        }
+
+        let inputs: Vec<prism_types::EmbeddingInput<'_>> = events
+            .iter()
+            .map(|event| prism_types::EmbeddingInput {
+                tenant_id: Some(&event.tenant_id),
+                purpose: prism_types::EmbeddingPurpose::Migration,
+                text: &event.body,
+            })
+            .collect();
+        let results = embedder.embed_batch_scoped(&inputs);
+        if results.len() != events.len() {
+            return Err(PrismError::Invariant(format!(
+                "re-embed model returned {} results for {} rows; refusing a migration with holes",
+                results.len(),
+                events.len()
+            )));
+        }
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(events.len());
+        let mut kept: Vec<Event> = Vec::with_capacity(events.len());
+        for (e, result) in events.into_iter().zip(results) {
+            match result {
+                Ok(v) => {
+                    vectors.push(v);
+                    kept.push(e);
+                }
+                Err(err) => {
+                    // A row that was embeddable under the old model but not the
+                    // new one must not vanish. Fail the migration loudly rather
+                    // than complete it with a hole in it.
+                    return Err(PrismError::Invariant(format!(
+                        "re-embedding `{}` failed under model version {new_version}: {err}. \
+                         Aborting the migration; the current generation is untouched.",
+                        e.event_id
+                    )));
+                }
+            }
+        }
+
+        // 2. Train new codebooks over a reservoir sample of the whole store —
+        //    not the first batch, and not the old codebooks reused in a new
+        //    space, which would be meaningless.
+        // Stratified, and keyed on `event_id` -- never on where the row was sitting (C-4).
+        // A codebook trained from a layout-dependent sample is a layout-dependent *meaning* for
+        // every byte the re-embed writes.
+        let (sample, prov) = crate::sample::stratified_sample(
+            &crate::generations::sample_rows(&kept, &vectors),
+            crate::sample::TRAIN_SAMPLE_MAX,
+            self.store.config.seed,
+            &snap.snapshot_id,
+            false,
+        )?;
+        let n = prov.rows_sampled;
+        let coarse = CoarseCodebook::train_restarts(
+            &sample,
+            n,
+            dim,
+            self.store.config.nlist,
+            self.store.config.seed,
+            self.store.config.kmeans_restarts,
+        )?;
+        let pq = PqCodebook::train_restarts(
+            &sample,
+            n,
+            dim,
+            self.store.config.pq_m,
+            self.store.config.seed,
+            self.store.config.kmeans_restarts,
+        )?;
+        let trained_from =
+            format!("re-embed from generation {old_gen_id}: reservoir sample of {n} vectors");
+        let new_gen = match embedder.artifacts() {
+            Some(artifacts) => Generation::new_registered(
+                embedder.model_id(),
+                embedder.model_version(),
+                artifacts.clone(),
+                dim,
+                coarse,
+                pq,
+                &trained_from,
+            )?,
+            None => Generation::new(
+                embedder.model_id(),
+                embedder.model_version(),
+                dim,
+                coarse,
+                pq,
+                &trained_from,
+            )?,
+        };
+
+        if new_gen.generation_id == old_gen_id {
+            return Err(PrismError::Invalid(
+                "re-embedding produced an identical generation; nothing to migrate".into(),
+            ));
+        }
+        self.catalog().put_generation(&new_gen)?;
+
+        // 3. Write the new parts.
+        let rows: Vec<RowIn> = kept
+            .into_iter()
+            .zip(vectors)
+            .map(|(event, vector)| {
+                let (centroid, _) = new_gen.coarse.assign(&vector);
+                let code = new_gen.pq.encode(&vector)?;
+                Ok(RowIn {
+                    event,
+                    centroid,
+                    code,
+                    vector,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let count = rows.len();
+
+        // The generation is part of the partition key, so a re-embed necessarily writes into
+        // NEW partitions -- which is exactly right: a part is pinned to one generation, and a
+        // partition that spanned two would be a partition whose parts disagree about what their
+        // bytes mean.
+        let scheme = self.store.config.partitions.clone();
+        let mut by_partition: BTreeMap<PartitionKey, Vec<RowIn>> = BTreeMap::new();
+        for r in rows {
+            let key = PartitionKey {
+                bucket: scheme.bucket_of(&r.event.tenant_id),
+                window: scheme.window_of(r.event.event_time),
+                generation: new_gen.generation_id.clone(),
+            };
+            by_partition.entry(key).or_default().push(r);
+        }
+
+        let mut new_parts: Vec<PartEntry> = Vec::new();
+        let mut seq = snap.next_seq;
+        for (key, rows) in by_partition {
+            let spec = PartSpec {
+                tenant_tokenizer: self.tenant_tokenizer()?,
+                partition: Some(key.clone()),
+                promote: self.store.config.promote.clone(),
+                lineage: Default::default(),
+                encryption: None,
+            };
+            let manifest = PartWriter::write(
+                &self.store.parts_dir(),
+                seq,
+                &new_gen.generation_id,
+                &new_gen.model_id,
+                &new_gen.model_version,
+                dim,
+                self.store.config.pq_m,
+                self.store.config.block_size,
+                &spec,
+                rows,
+                now_ms,
+            )?;
+            seq += 1;
+            new_parts.push(PartEntry::Located(crate::ingest::part_ref(
+                &manifest, &key,
+            )?));
+        }
+        let parts_written = new_parts.len();
+
+        // 4. One atomic swap. Before it, every query sees the old generation;
+        //    after it, every query sees the new one. Never a mixture of the two
+        //    in a single answer.
+        let new_snap = self.catalog().commit(
+            &snap,
+            new_parts,
+            seq,
+            Some(new_gen.generation_id.clone()),
+            now_ms,
+        )?;
+
+        Ok(ReembedReport {
+            old_generation: old_gen_id,
+            new_generation: new_gen.generation_id,
+            old_model: format!("{}:{}", old_gen.model_id, old_gen.model_version),
+            new_model: format!("{}:{}", embedder.model_id(), embedder.model_version()),
+            rows: count,
+            parts_written,
+            snapshot_id: new_snap.snapshot_id,
+            rollback_to: snap.snapshot_id,
+        })
+    }
+
+    /// Roll back to an earlier snapshot. A catalog reference change; not a data
+    /// rewrite, not a restore, not a copy. The parts it names must still exist —
+    /// if GC has already reclaimed them, we say so instead of committing a
+    /// snapshot that would not open (invariant 2).
+    pub fn rollback(&self, to: &str, now_ms: i64) -> Result<String> {
+        let target = self.catalog().load_snapshot(to)?;
+        let current = self.snapshot()?;
+        let next_seq = current.next_seq.max(target.next_seq);
+        let snap = self.catalog().commit(
+            &current,
+            target.parts.clone(),
+            next_seq,
+            target.active_generation.clone(),
+            now_ms,
+        )?;
+        Ok(snap.snapshot_id)
+    }
+}

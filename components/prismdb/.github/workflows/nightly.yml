@@ -1,0 +1,127 @@
+name: nightly
+
+# The S1 acceptance gate, at full size.
+#
+# > "10,000 randomized kill/reopen runs yield old-or-new snapshot, never hybrid."
+#
+# It takes ~11 minutes, which is too long for every push and far too short to be
+# an excuse not to run it every night.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  campaign:
+    name: 10,000-run kill/reopen campaign
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: kill the writer 10,000 times at random durability boundaries
+        run: |
+          PRISM_CAMPAIGN_RUNS=10000 \
+            cargo test --release -p prism-cli --test campaign -- --ignored --nocapture
+
+  deep-fuzz:
+    name: extended format fuzzing
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release -p prism-part --test fuzz -- --nocapture
+
+  block-size-provenance:
+    name: the retained hash-v1 block-size receipt still reproduces
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      # This CLI command uses the deterministic 64d hash-v1 fixture. Compare it with
+      # the retained hash-v1 series, not the shipped real-v1/768d value. Mixing those
+      # corpora made this gate permanently red after the S13 re-derivation.
+      - name: re-derive and compare
+        run: |
+          set -euxo pipefail
+          ./target/release/prism evidence block-size --out /tmp/bs.json >/dev/null
+          python3 - <<'PY'
+          import json
+          fresh = json.load(open("/tmp/bs.json"))
+          committed = json.load(open("testing/evidence/block-size.json"))
+          assert committed["shipped_series"] == "real-v1"
+          expected = committed["series"]["hash-v1"]["chosen_block_size"]
+          print(f"fresh hash-v1 sweep chose {fresh['chosen_block_size']}, "
+                f"retained hash-v1 receipt says {expected}")
+          assert fresh["chosen_block_size"] == expected, \
+              "the retained hash-v1 block-size receipt no longer reproduces"
+          print("the retained hash-v1 series still reproduces.")
+          PY
+
+  width-provenance:
+    name: the retained hash-v1 width receipt still reproduces
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: re-derive and compare
+        run: |
+          set -euxo pipefail
+          ./target/release/prism evidence widths --out /tmp/w.json >/dev/null
+          python3 - <<'PY'
+          import json
+          fresh = json.load(open("/tmp/w.json"))
+          committed = json.load(open("testing/evidence/widths.json"))
+          assert committed["shipped_series"] == "real-v1"
+          retained = committed["series"]["hash-v1"]
+          for k in ("chosen_candidates", "chosen_rerank"):
+              print(f"{k}: fresh hash-v1={fresh[k]} retained hash-v1={retained[k]}")
+              assert fresh[k] == retained[k], f"retained hash-v1 {k} no longer reproduces"
+          print("the retained hash-v1 width series still reproduces.")
+          PY
+
+  nprobe-provenance:
+    name: the retained hash-v1 nprobe receipt still reproduces
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      # The CLI fixture below is hash-v1. The shipped default was re-derived on
+      # real-v1; this job verifies the retained paired series without comparing
+      # values from different corpora.
+      - name: re-derive and compare
+        run: |
+          set -euxo pipefail
+          P=./target/release/prism
+          $P init --path /tmp/g --dim 64 --nlist 32 --pq-m 8 --seed 1234
+          $P ingest --path /tmp/g --file testing/golden/v1/corpus.tsv
+          $P golden sweep --path /tmp/g --golden testing/golden/v1/expected.json \
+             --out /tmp/prov.json --p1-floor 0.8 >/dev/null
+          python3 - <<'PY'
+          import json
+          fresh = json.load(open("/tmp/prov.json"))
+          committed = json.load(open("testing/evidence/nprobe.json"))
+          assert committed["shipped_series"] == "real-v1"
+          expected = committed["series"]["hash-v1"]["chosen_nprobe"]
+          print(f"fresh hash-v1 sweep chose nprobe={fresh['chosen_nprobe']}, "
+                f"retained hash-v1 receipt says {expected}")
+          assert fresh["chosen_nprobe"] == expected, \
+              "the retained hash-v1 nprobe receipt no longer reproduces"
+          print("the retained hash-v1 nprobe series still reproduces.")
+          PY

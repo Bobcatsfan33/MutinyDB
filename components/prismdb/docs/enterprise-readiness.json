@@ -1,0 +1,331 @@
+{
+  "schemaVersion": 1,
+  "product": "PrismDB",
+  "repository": "Bobcatsfan33/PrismDB",
+  "assessment": {
+    "asOf": "2026-07-30",
+    "reviewBy": "2026-10-29",
+    "softwareReleaseCandidate": false,
+    "deploymentDecision": "not-approved",
+    "decisionReason": "PrismDB now has an authenticated tenant-scoped read/write API and remote-durable admission recovery, but the supported shard-node distribution, encryption, backup/hydration and RPO/RTO, independent operational evidence, and organizational deployment gates remain open."
+  },
+  "frameworks": [
+    {
+      "id": "nist-ssdf-1.1",
+      "name": "NIST SP 800-218 Secure Software Development Framework",
+      "version": "1.1",
+      "url": "https://csrc.nist.gov/pubs/sp/800/218/final"
+    },
+    {
+      "id": "slsa-1.2",
+      "name": "Supply-chain Levels for Software Artifacts",
+      "version": "1.2",
+      "url": "https://slsa.dev/spec/v1.2/"
+    },
+    {
+      "id": "owasp-asvs-5.0.0",
+      "name": "OWASP Application Security Verification Standard",
+      "version": "5.0.0",
+      "url": "https://owasp.org/www-project-application-security-verification-standard/"
+    },
+    {
+      "id": "csa-ccm-caiq-4.1",
+      "name": "CSA Cloud Controls Matrix and CAIQ",
+      "version": "4.1",
+      "url": "https://cloudsecurityalliance.org/artifacts/cloud-controls-matrix-v4-1"
+    },
+    {
+      "id": "nist-ai-rmf-1.0",
+      "name": "NIST Artificial Intelligence Risk Management Framework",
+      "version": "1.0",
+      "url": "https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-ai-rmf-10"
+    },
+    {
+      "id": "csa-ai-caiq-1.0.2",
+      "name": "CSA AI Consensus Assessments Initiative Questionnaire",
+      "version": "1.0.2",
+      "url": "https://cloudsecurityalliance.org/artifacts/ai-consensus-assessments-initiative-questionnaire-ai-caiq"
+    }
+  ],
+  "controls": [
+    {
+      "id": "GOV-01",
+      "title": "Security governance and product boundary",
+      "status": "implemented",
+      "frameworks": ["nist-ssdf-1.1", "nist-ai-rmf-1.0"],
+      "evidence": ["SECURITY.md", "docs/PRISM.md", "docs/DECISIONS.md", "docs/PROGRESS.md"],
+      "gaps": []
+    },
+    {
+      "id": "SDLC-01",
+      "title": "Secure development and change verification",
+      "status": "implemented",
+      "frameworks": ["nist-ssdf-1.1", "owasp-asvs-5.0.0"],
+      "evidence": [
+        ".github/CODEOWNERS",
+        ".github/workflows/ci.yml",
+        ".github/workflows/nightly.yml",
+        "docs/UNSAFE-INVENTORY.md"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "APPSEC-01",
+      "title": "Technical security verification",
+      "status": "partial",
+      "frameworks": ["owasp-asvs-5.0.0", "csa-ccm-caiq-4.1"],
+      "evidence": [
+        "SECURITY.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/prismd-release.yml",
+        "docs/PUBLIC-READ-SERVICE.md",
+        "docs/UNSAFE-INVENTORY.md",
+        "crates/prism-service/src/lib.rs"
+      ],
+      "gaps": [
+        "No commissioned independent penetration test exists.",
+        "The authenticated read listener has in-repository abuse and isolation gates but has not undergone independent ASVS-scoped verification."
+      ]
+    },
+    {
+      "id": "SUPPLY-01",
+      "title": "Release integrity, SBOM, signing, and provenance",
+      "status": "partial",
+      "frameworks": ["nist-ssdf-1.1", "slsa-1.2", "csa-ccm-caiq-4.1"],
+      "evidence": [
+        ".github/workflows/security.yml",
+        ".github/workflows/model-service-release.yml",
+        ".github/workflows/prismd-release.yml",
+        ".github/workflows/prism-shard-release.yml",
+        "deploy/prismd/Dockerfile",
+        "deploy/prism-shard/Dockerfile",
+        "deploy/helm/prism-shard/values.schema.json",
+        "scripts/check_release_admission.py",
+        "docs/RELEASE-ASSURANCE.md"
+      ],
+      "gaps": [
+        "Signed SBOM/provenance release assurance now covers the model service, the public API coordinator, and the shard-node database distribution, but no release has yet been promoted through a protected tag under a repository ruleset restricting tag creation to release maintainers."
+      ]
+    },
+    {
+      "id": "IAM-01",
+      "title": "Identity, authorization, and tenant isolation",
+      "status": "partial",
+      "frameworks": ["owasp-asvs-5.0.0", "csa-ccm-caiq-4.1", "csa-ai-caiq-1.0.2"],
+      "evidence": [
+        "docs/QUERY-CONTRACT.md",
+        "docs/SHARD-TRANSPORT.md",
+        "docs/PUBLIC-READ-SERVICE.md",
+        "docs/openapi-public-read-v1.yaml",
+        "docs/MODEL-PLANE.md",
+        "crates/prism-engine/src/shard_rpc.rs",
+        "crates/prism-service/src/lib.rs"
+      ],
+      "gaps": [
+        "Read and ingest use exact-certificate tenant grants, but independent tenant-escape verification and lifecycle evidence remain open."
+      ]
+    },
+    {
+      "id": "CRYPTO-01",
+      "title": "Transport, storage encryption, and key management",
+      "status": "partial",
+      "frameworks": ["owasp-asvs-5.0.0", "csa-ccm-caiq-4.1"],
+      "evidence": [
+        "docs/SHARD-TRANSPORT.md",
+        "docs/PUBLIC-READ-SERVICE.md",
+        "docs/STORAGE-CONTRACT.md",
+        "docs/ENCRYPTION-CONTRACT.md",
+        "SECURITY.md",
+        "crates/prism-part/src/crypto.rs",
+        "crates/prism-engine/src/keys.rs",
+        "crates/prism-engine/tests/encrypted_store.rs",
+        "crates/prism-engine/tests/rewrap.rs",
+        "crates/prism-cli/src/keystore.rs"
+      ],
+      "gaps": [
+        "Per-tenant envelope encryption is implemented and gated, but EVERY gate was exercised against the software keystore. That proves the code path and does not prove key custody: no run against a production KMS/HSM exists, so the production key lifecycle -- ceremony, custody, multi-region replication -- remains unproven. Tracked as external gate EXT-KMS; no receipt in this repository may be read as custody evidence until it closes.",
+        "Rotation is implemented as expand/activate/rewrap/retire and gated end to end, but only against software-keystore key versions; no rotation has been performed against a real KMS key version."
+      ]
+    },
+    {
+      "id": "DATA-01",
+      "title": "Data protection, privacy, retention, and deletion",
+      "status": "partial",
+      "frameworks": ["csa-ccm-caiq-4.1", "csa-ai-caiq-1.0.2", "nist-ai-rmf-1.0"],
+      "evidence": [
+        "docs/QUERY-CONTRACT.md",
+        "docs/MODEL-GOVERNANCE.md",
+        "docs/INGESTION-CONTRACT.md",
+        "docs/ENCRYPTION-CONTRACT.md",
+        "crates/prism-engine/tests/encrypted_backup.rs",
+        "crates/prism-engine/tests/tenant_sealing.rs",
+        "crates/prism-part/src/tenant.rs",
+        "crates/prism-cli/tests/encrypted_drill.rs"
+      ],
+      "gaps": [
+        "Versioned redact-before-embedding, production retention/deletion, and residency remain open.",
+        "Raw-disk metadata confidentiality is CLOSED for tenant identity (D-096). Row content is sealed on every durable surface, and tenant identity is now a keyed store-scoped token in the part manifest, TenantStats, and the catalog mirror's PartEntry -- so raw disk or bucket access no longer discloses TENANT NAMES or ROW CONTENT. The encrypted disaster drill asserts that no event body AND no tenant name appears in any object under parts/, wal/, catalog/ or generations/, before and after recovery. What raw access still discloses, by standing decision or as a named residual: the BUCKET ORDINAL stays plaintext so hydration's wrong-shard refusal works before anything is unwrapped; and token EQUALITY remains observable, so an observer can still infer that some tenant occupies N parts and shares a bucket with some other tenant. Sealing identity is not sealing the existence of distinct tenants, and no claim here says otherwise."
+      ]
+    },
+    {
+      "id": "RES-01",
+      "title": "Backup, recovery, failover, and resilience",
+      "status": "partial",
+      "frameworks": ["csa-ccm-caiq-4.1"],
+      "evidence": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/nightly.yml",
+        "docs/STORAGE-CONTRACT.md",
+        "docs/SHARD-TRANSPORT.md",
+        "docs/DECISIONS.md",
+        "crates/prism-engine/src/shard_rpc.rs",
+        "crates/prism-engine/src/wal.rs",
+        "crates/prism-engine/src/storage/hydrate.rs",
+        "crates/prism-engine/src/storage/mirror.rs",
+        "crates/prism-cli/tests/remote_wal.rs",
+        "crates/prism-cli/tests/hydration.rs"
+      ],
+      "gaps": [
+        "No customer-scale RPO/RTO drill exists: the automated disaster drill is process-isolated on a single host and its recovery-point and recovery-time numbers are staging-shaped, not independent-host or customer-scale evidence.",
+        "Published-part backup and replacement-node hydration are gated end-to-end, but object versioning and retention covering the recovery window remain an operator-side deployment duty the software cannot enforce, and independent-host latency/jitter/scaling evidence remains open."
+      ]
+    },
+    {
+      "id": "OBS-01",
+      "title": "Operational observability and SLO evidence",
+      "status": "partial",
+      "frameworks": ["csa-ccm-caiq-4.1", "csa-ai-caiq-1.0.2"],
+      "evidence": [
+        "baselines.json",
+        "docs/PROGRESS.md",
+        "docs/PUBLIC-READ-SERVICE.md",
+        "crates/prism-service/src/lib.rs",
+        ".github/workflows/nightly.yml"
+      ],
+      "gaps": [
+        "The read service exports fixed-cardinality metrics and minimum alert guidance, but no approved SLO/error budget or representative long-running API workload evidence exists.",
+        "Distributed tracing and a retained production dashboard/alert validation remain open."
+      ]
+    },
+    {
+      "id": "IR-01",
+      "title": "Incident and vulnerability response",
+      "status": "partial",
+      "frameworks": ["nist-ssdf-1.1", "csa-ccm-caiq-4.1"],
+      "evidence": ["SECURITY.md", "docs/incident-response.md"],
+      "gaps": [
+        "Named on-call staff, customer notification, and an exercised incident drill are organizational gates."
+      ]
+    },
+    {
+      "id": "VM-01",
+      "title": "Dependency and vulnerability management",
+      "status": "implemented",
+      "frameworks": ["nist-ssdf-1.1", "csa-ccm-caiq-4.1"],
+      "evidence": ["SECURITY.md", ".github/dependabot.yml", ".github/workflows/security.yml"],
+      "gaps": []
+    },
+    {
+      "id": "AIRISK-01",
+      "title": "Model identity, quality, drift, and AI governance",
+      "status": "partial",
+      "frameworks": ["nist-ai-rmf-1.0", "csa-ai-caiq-1.0.2"],
+      "evidence": [
+        "docs/MODEL-GOVERNANCE.md",
+        "docs/MODEL-PLANE.md",
+        "docs/DETERMINISM-CONTRACT.md",
+        "baselines.json"
+      ],
+      "gaps": [
+        "Real-embedding corpus retuning, production GPU execution evidence, calibrated OOD/drift gates, and long-running service evaluation remain open."
+      ]
+    }
+  ],
+  "externalGates": [
+    {
+      "id": "ENG-SERVICE",
+      "title": "Production service and supported distribution",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "Engineering",
+      "acceptanceCriteria": "The shipped authenticated public read/write API is joined by migration/version policy, a complete signed shard-node database distribution, and production deployment manifests that pass release gates. The signed shard-node distribution and its deployment manifests are complete; migration/version policy and the operational gates below remain.",
+      "evidence": [
+        "docs/SHARD-TRANSPORT.md",
+        "docs/PUBLIC-READ-SERVICE.md",
+        "docs/RELEASE-ASSURANCE.md",
+        "docs/openapi-public-read-v1.yaml",
+        "crates/prism-engine/src/shard_rpc.rs",
+        "crates/prism-engine/src/wal.rs",
+        "crates/prism-cli/src/main.rs",
+        "crates/prism-cli/tests/remote_wal.rs",
+        "crates/prism-cli/tests/shard_distribution.rs",
+        "crates/prism-service/src/lib.rs",
+        "deploy/helm/prismdb/Chart.yaml",
+        "deploy/helm/prism-shard/Chart.yaml",
+        "deploy/helm/prism-shard/templates/statefulset.yaml",
+        "deploy/prism-shard/Dockerfile",
+        ".github/workflows/prismd-release.yml",
+        ".github/workflows/prism-shard-release.yml"
+      ]
+    },
+    {
+      "id": "EXT-PENTEST",
+      "title": "Independent penetration test",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "Product Security",
+      "acceptanceCriteria": "Signed final report covers API, shard transport, model plane, tenant isolation, formats, and deployment; critical/high findings are closed or CISO-accepted.",
+      "evidence": []
+    },
+    {
+      "id": "EXT-DR",
+      "title": "Production-topology recovery and failover exercise",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "SRE",
+      "acceptanceCriteria": "Signed customer-scale drill proves approved RPO/RTO, backup restoration, partition behavior, and write failover.",
+      "evidence": []
+    },
+    {
+      "id": "EXT-OPERATIONS",
+      "title": "Support, incident, SLO, and escalation readiness",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "Support and SRE",
+      "acceptanceCriteria": "Named 24x7 escalation rota, contracted support/SLO targets, status communications, and exercised incident notification procedure.",
+      "evidence": []
+    },
+    {
+      "id": "EXT-COMPLIANCE",
+      "title": "Organizational assurance and contractual package",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "GRC and Legal",
+      "acceptanceCriteria": "Buyer-required SIG/CAIQ, DPA, subprocessor/residency disclosure, and applicable SOC 2 or ISO 27001 evidence approved.",
+      "evidence": []
+    },
+    {
+      "id": "EXT-SCALE",
+      "title": "Multi-host shard scaling: the D-071 near-linear claim",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "Engineering and SRE",
+      "acceptanceCriteria": "D-071's shared-nothing scaling claim is measured on FOUR OR MORE REAL HOSTS, one shard per host, over a shared durable object store, against the targets declared before measurement in testing/evidence/s12-verdict-spec.md (>= 3.5x end-to-end 1->4). A CI runner cannot honestly measure this and must not be used to: the shipped in-process configuration fans out concurrently but the host's CPU cores and memory bandwidth are fixed regardless of shard count, so its measured 1.05x-1.6x is an Amdahl ceiling of the harness rather than a property of the design -- it lower-bounds the real number and cannot confirm or falsify it. The measurement is deliberately NOT funded before a design partner needs it; until then the claim is unproven rather than either supported or refuted. Distribution CORRECTNESS (sharding is a layout at 1/2/4, the two-round global-candidate-set merge, partial failure, hedging) and the commit-RTT authority primitive are proven separately and do not depend on this gate.",
+      "evidence": [
+        "testing/evidence/s12-verdict-spec.md",
+        "testing/evidence/s12-scaling.json",
+        "crates/prism-cli/tests/scaling.rs",
+        "docs/QUERY-CONTRACT.md"
+      ]
+    },
+    {
+      "id": "EXT-KMS",
+      "title": "Production key custody: envelope encryption against a real KMS/HSM",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "Security Engineering and SRE",
+      "acceptanceCriteria": "The encryption gate suite is re-run with a production KMS/HSM KeyProvider in place of the software keystore, and the receipts name that backend. It must cover, against real key versions: wrap and unwrap on the ingest and read paths; a full expand/activate/rewrap/retire rotation with retire refused while live envelopes still need the key; restore through a retired-but-authorized previous key; and the D-094 disaster drill end to end with encryption enabled. The named failure modes -- unreachable, denied, throttled, revoked -- must be produced by the real key service rather than injected by the software keystore's fault surface, and each must still fail closed with no partial state and retry cleanly. A region-wide KMS outage is a recovery blocker by design, so the deployment's multi-region key replication posture is recorded as an operator-side decision rather than a software guarantee. Until this gate closes, no receipt in this repository may be read as evidence of key custody: the software-keystore runs prove the code path only, and the key ceremony itself remains external.",
+      "evidence": []
+    }
+  ]
+}

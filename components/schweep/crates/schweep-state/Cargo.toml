@@ -1,0 +1,17 @@
+[package]
+name = "schweep-state"
+description = "The StateBackend trait and its in-memory implementation: operator state behind an interface."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+schweep-zset.workspace = true
+redb.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

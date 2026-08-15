@@ -1,0 +1,15 @@
+/target
+**/*.rs.bk
+__pycache__/
+*.py[cod]
+
+# Quickstart scratch (created by scripts/check-readme-quickstart.sh)
+/demo
+/events.tsv
+
+# Local stores and scratch corpora
+/*.tsv
+!testing/golden/*.tsv
+!testing/compat/*.tsv
+/scratch
+.DS_Store

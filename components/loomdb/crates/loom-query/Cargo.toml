@@ -1,0 +1,17 @@
+[package]
+name = "loom-query"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+loom-core = { path = "../loom-core" }
+# default-features = false so loom-query does not force the remote path on; airgap forwards (see [features]).
+loom-branch = { path = "../loom-branch", default-features = false }
+substrate-pager.workspace = true
+
+[features]
+default = ["remote"]
+remote = ["loom-branch/remote"]
+airgap = ["loom-branch/airgap"]
+
+[dev-dependencies]

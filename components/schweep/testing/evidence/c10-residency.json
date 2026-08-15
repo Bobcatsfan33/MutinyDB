@@ -1,0 +1,61 @@
+{
+  "$comment": [
+    "C10 · what a log's history costs in resident memory, before and after paging (I-10).",
+    "Produced by: cargo test --release -p schweep-soak --test c10_log_residency -- --nocapture",
+    "MACHINE-DEPENDENT: resident memory is an allocator and kernel figure, so no test recomputes",
+    "these rows. The gate asserts a SHARE rather than a value, so it means the same thing on any",
+    "machine and at any size.",
+    "",
+    "The measurement is a difference, not a value: resident memory has a floor that has nothing to",
+    "do with the log, and quoting a value would be quoting the floor. So the gate opens a log over a",
+    "small history and over a ten-times-larger one and asks what the extra history cost."
+  ],
+  "shape": {
+    "rows_per_epoch_per_table": 400,
+    "padding_bytes": 480,
+    "tables": 2,
+    "appends_per_epoch": 2
+  },
+  "before_c10": {
+    "$comment": "Not re-measured here — it is what C9's own gates measured of the design this replaces, and it is quoted so the after-figure has something to be against.",
+    "design": "Log kept every sealed batch resident (sealed: Vec<Vec<Batch>>) and read the whole segment with read_to_end at open",
+    "soak_attribution_bytes_per_epoch": 1589,
+    "memo_ceiling_peak_rss_bytes_through_a_log": 342818816,
+    "memo_ceiling_input_bytes": 269121009,
+    "share_of_history_resident": "approximately 1.0"
+  },
+  "after_c10": {
+    "design": "Log holds an EpochSpan (16 bytes) per epoch; Log::epoch reads the records from the segment; the open scan and compaction both stream",
+    "small_history_bytes": 25501758,
+    "small_epochs": 62,
+    "large_history_bytes": 251728232,
+    "large_epochs": 612,
+    "extra_history_bytes": 226226474,
+    "extra_rss_bytes": 3457024,
+    "share_of_extra_history_resident": 0.0153,
+    "gate_allows": 0.05,
+    "verdict": "PASSED: ten times the history cost 1.53% of it in resident memory"
+  },
+  "what_still_grows_with_history": {
+    "dedup_index": {
+      "cost": "one entry per acknowledged append",
+      "measured_tokens": { "small": 124, "large": 1224 },
+      "why_it_exists": "I-4 — a token forgotten is a batch that can be applied twice. Bounding it needs a retention policy, which is a decision and not an optimisation.",
+      "status": "measured and reported by Log::dedup_len; NOT bounded"
+    },
+    "span_index": {
+      "cost": "16 bytes per retained epoch",
+      "measured_bytes": { "small": 992, "large": 9792 },
+      "status": "bounded by the epoch count, reported by Log::index_bytes"
+    }
+  },
+  "correctness": {
+    "$comment": "Performance work may not move a result byte (I-1). What was re-run against the paged log:",
+    "crash_gate_cycles": 10000,
+    "crash_gate_seconds": 481,
+    "kill9_matrix_sigkills": 1000,
+    "kill9_matrix_seconds": 195,
+    "compaction_gate": "green",
+    "span_index_vs_full_scan": "agrees epoch for epoch over 241 epochs"
+  }
+}

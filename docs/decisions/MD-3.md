@@ -8,7 +8,7 @@ commit)
 
 ## Context
 
-MutinyDB inherits three query surfaces. Current has a dialect ladder and a binder that refuses
+MutinyDB inherits three query surfaces. Schweep has a dialect ladder and a binder that refuses
 anything outside it *by name* (its §5.6, D-4), with I-6 — the same-door law — asserting that SQL and
 the typed API compile to identical plans and identical execution counters. PrismDB has a minimal
 SQL subset with `embedding ≈≈ 'text'` (and the ASCII alias `~~`, because a Unicode operator that
@@ -29,33 +29,33 @@ willing to break either.
 
 ### Option A1 — Three doors, three dialects, one process
 
-Ship `mutinyd` with Current's SQL for relational queries, Prism's SQL for semantic ones, and Loom's
+Ship `mutinyd` with Schweep's SQL for relational queries, Prism's SQL for semantic ones, and Loom's
 MCP for trust operations, sharing only the storage beneath.
 
 Cheapest, and it forfeits the product. A hybrid standing query (`≈≈` *and* scalar predicates, M2's
 exit gate) has no door to be asked at, and the same-door law becomes three same-door laws that say
 nothing about each other.
 
-### Option A2 — One dialect, owned by MutinyDB, lowering into Current's plan algebra
+### Option A2 — One dialect, owned by MutinyDB, lowering into Schweep's plan algebra
 
-A single binder in this repository: Current's dialect ladder as the base, extended with the
-semantic, temporal and provenance constructs, lowering to Current's logical plan plus a small set of
+A single binder in this repository: Schweep's dialect ladder as the base, extended with the
+semantic, temporal and provenance constructs, lowering to Schweep's logical plan plus a small set of
 new plan nodes that the incrementalizer knows how to rewrite.
 
 This is the shape M6 requires. The cost is a real one and worth naming: MutinyDB's binder must track
-Current's binder as Current's dialect grows, or the two drift — a public engine and a private
+Schweep's binder as Schweep's dialect grows, or the two drift — a public engine and a private
 consolidation with the same name for different behaviour, which is the MD-4 problem wearing a
 different hat.
 
-### Option A3 — Push the whole unified dialect upstream into Current
+### Option A3 — Push the whole unified dialect upstream into Schweep
 
-Make Current's binder speak `≈≈`, `AS OF BRANCH` and `TAINTED BY` natively; MutinyDB just supplies
+Make Schweep's binder speak `≈≈`, `AS OF BRANCH` and `TAINTED BY` natively; MutinyDB just supplies
 the implementations.
 
-Rejected by MD-1 R4 and by Current's own architecture: Current is standalone and *nothing in it may
+Rejected by MD-1 R4 and by Schweep's own architecture: Schweep is standalone and *nothing in it may
 depend on substrate, LoomDB or PrismDB*. `AS OF BRANCH` has no meaning without a fork; `TAINTED BY`
-has no meaning without envelopes. Pushing them upstream would make Current's dialect describe
-capabilities Current does not have — the exact "two masters" fork §6 forbids.
+has no meaning without envelopes. Pushing them upstream would make Schweep's dialect describe
+capabilities Schweep does not have — the exact "two masters" fork §6 forbids.
 
 ### Option B1 — `≈≈` as a boolean predicate with a similarity threshold
 
@@ -71,7 +71,7 @@ means a model generation change silently changes the membership of every standin
 explicit `WITH SIMILARITY > x` written by the asker who then owns the constant.
 
 Matches how Prism's own tests use it (`… ≈≈ 'the tool call timed out' LIMIT 10`), keeps the
-incremental top-k operator's state bound declarable (Current I-9), and refuses the unbounded case
+incremental top-k operator's state bound declarable (Schweep I-9), and refuses the unbounded case
 loudly instead of scanning a cold tier by accident.
 
 ### Option C1 — `AS OF` uniformly available on standing and one-shot queries
@@ -87,14 +87,14 @@ query pinned to a branch is a perfectly ordinary standing query with a scope.
 **Scope** (`AS OF BRANCH b`) selects which world the query runs in and is legal for standing
 queries. **Pin** (`AS OF EPOCH n` / `AS OF COMMIT '<hex>'` / `AS OF TIME t`) fixes an instant and is
 legal only for one-shot reads — with the one exception that a pin against a *retained* epoch of an
-already-registered standing query is answered from its result store (Current C6's read-at-epoch),
+already-registered standing query is answered from its result store (Schweep C6's read-at-epoch),
 because that is a read, not a second circuit.
 
 ### Option D1 — `TAINTED BY` computed as a recursive closure at query time
 
 Walk `mutiny_derivation` transitively when the predicate is evaluated.
 
-Impossible in v1 and worth being explicit about: Current's D-3 puts recursive and iterative circuits
+Impossible in v1 and worth being explicit about: Schweep's D-3 puts recursive and iterative circuits
 out of scope, so there is no incremental transitive closure to compile to. A one-shot-only
 `TAINTED BY` would then behave differently from every other predicate in the dialect.
 
@@ -115,7 +115,7 @@ what makes MD-2's `taint(S)` a two-step of ordinary operations rather than a gra
 
 ### The surface
 
-**Base.** Current's dialect ladder verbatim (its §5.6): (1) `SELECT`/`WHERE`/projection with the
+**Base.** Schweep's dialect ladder verbatim (its §5.6): (1) `SELECT`/`WHERE`/projection with the
 scalar expression library; (2) inner equi-`JOIN`; (3) `GROUP BY` + `SUM/COUNT/MIN/MAX/AVG` +
 `HAVING`; (4) `DISTINCT`, `UNION ALL`, `ORDER BY`/`LIMIT` at read time; (5) `LEFT JOIN` and
 decorrelatable subqueries. Three-valued logic from rung 1. Every ordering carries a total tiebreak
@@ -182,7 +182,7 @@ SELECT * FROM claims WHERE TAINTED BY 'crm:acct-42';
   `DELETE`-shaped SQL statement that quietly suspends accounts is exactly the affordance MutinyDB
   should not have.
 
-**Explain.** `EXPLAIN` reports the plan and the resolved `AS OF` world; `EXPLAIN STATE` (Current C8)
+**Explain.** `EXPLAIN` reports the plan and the resolved `AS OF` world; `EXPLAIN STATE` (Schweep C8)
 reports per-operator state; `EXPLAIN MAINTENANCE` (R-3's mitigation) reports the per-epoch
 maintenance cost of a standing query, including the derivation-edge fan-out MD-2 introduces. A
 standing query whose maintenance cost cannot be declared is admitted only explicitly (I-9).
@@ -191,14 +191,14 @@ standing query whose maintenance cost cannot be declared is admitted only explic
 
 | Construct | Lands in | Needs | Proven by |
 | --- | --- | --- | --- |
-| Ladder rungs 1–5 | inherited | Current C5 | Current's binder corpus + differential harness |
-| `≈≈` (bounded), embedding-at-ingest | **M2** | Current C5–C6 | hybrid standing query equals Prism's one-shot answer at every epoch, frozen golden corpus |
-| `GROUP BY semantic_cluster`, `NOVELTY`, `SEMANTIC_DIFF` | **M2** | Current C5–C6 | Prism's engine-level gates, re-run through the SQL door |
+| Ladder rungs 1–5 | inherited | Schweep C5 | Schweep's binder corpus + differential harness |
+| `≈≈` (bounded), embedding-at-ingest | **M2** | Schweep C5–C6 | hybrid standing query equals Prism's one-shot answer at every epoch, frozen golden corpus |
+| `GROUP BY semantic_cluster`, `NOVELTY`, `SEMANTIC_DIFF` | **M2** | Schweep C5–C6 | Prism's engine-level gates, re-run through the SQL door |
 | Generation pinning + refusal to merge score spaces | **M2** | — | two generations live; cross-space merge refused |
-| `AS OF BRANCH` (scope) | **M3** | Current C6 | Loom's isolation oracle over branch-scoped result stores |
-| `AS OF COMMIT` / `AS OF EPOCH` (pin) | **M3** | Current C6–C7 | read-at-epoch equals a one-shot over the same world |
+| `AS OF BRANCH` (scope) | **M3** | Schweep C6 | Loom's isolation oracle over branch-scoped result stores |
+| `AS OF COMMIT` / `AS OF EPOCH` (pin) | **M3** | Schweep C6–C7 | read-at-epoch equals a one-shot over the same world |
 | `AS OF TIME` (pin, bind-time resolution) | **M3** | C7 | the non-monotonic-clock refusal test |
-| `TAINTED BY` | **M4** | M1 + M3 + Current C11 | the frozen incident corpus: rows returned equal the oracle's downstream-of-S set |
+| `TAINTED BY` | **M4** | M1 + M3 + Schweep C11 | the frozen incident corpus: rows returned equal the oracle's downstream-of-S set |
 | `EXPLAIN MAINTENANCE` | **M4** | C8 | numbers reconcile with measured per-epoch cost within a stated tolerance |
 | Same-door law across SQL / typed / MCP | **M6** | C9 | identical plans and identical counters through all three doors |
 
@@ -207,7 +207,7 @@ name, with the phase in the message ("`TAINTED BY` is M4") — never accepted an
 
 ### The rule that keeps the dialect honest
 
-Adopted verbatim from Current's working agreements, because it is the rule that catches the bug the
+Adopted verbatim from Schweep's working agreements, because it is the rule that catches the bug the
 differential harness cannot: **every dialect change adds a row to the binder corpus (text ↔ expected
 plan) and every refusal adds a row to the refusal corpus.** I-6 makes both doors compile to identical
 plans, so a binder that maps text to a *valid but wrong* plan produces the same wrong plan through
@@ -217,8 +217,8 @@ whatever the binder does."
 
 ## Consequences
 
-- **MutinyDB's binder must track Current's.** A2's stated cost. Mitigation: the base ladder is
-  consumed from Current's crates at a pinned tag (MD-1 R3) rather than reimplemented, so a divergence
+- **MutinyDB's binder must track Schweep's.** A2's stated cost. Mitigation: the base ladder is
+  consumed from Schweep's crates at a pinned tag (MD-1 R3) rather than reimplemented, so a divergence
   is a compile error at upgrade time rather than a semantic drift. Only the four extensions above are
   written here.
 - **`≈≈` without a bound is refused, and someone will find that annoying.** It is the right

@@ -1,0 +1,294 @@
+{
+  "$comment": [
+    "THE LEDGER (ARCHITECTURE.md §1, I-10).",
+    "Every tuned constant, with the artifact that justifies it.",
+    "A constant not in this ledger may not steer behavior.",
+    "",
+    "Two sections, because there are two kinds of constant and only one of them is in the",
+    "engine:",
+    "",
+    "  constants           — constants in the ENGINE. Still empty: nothing is tuned yet. There",
+    "                        is no cache, no batch size, no threshold, and no benchmark. The",
+    "                        first entries arrive when the first constant does (RocksDB block",
+    "                        cache and bloom filters in C8, consolidate() tuning in C10), and",
+    "                        each arrives with its receipt or not at all. C8 filled it: the redb page",
+    "                        cache, the two state-cost constants EXPLAIN STATE reports with, and the",
+    "                        soak harness's warm-up and flatness thresholds.",
+    "",
+    "  generator_constants — constants in the SCENARIO GENERATOR. These do not steer the engine;",
+    "                        they steer what the test suite covers, which deserves a receipt at",
+    "                        least as much. An engine constant set badly makes the engine slow.",
+    "                        A generator constant set badly makes a green suite meaningless —",
+    "                        and it does so silently, because everything still passes.",
+    "",
+    "An entry has the shape:",
+    "  {",
+    "    \"name\":        \"the constant, as it appears in code\",",
+    "    \"value\":        <the value>,",
+    "    \"location\":     \"path.rs\",",
+    "    \"steers\":       \"what this changes\",",
+    "    \"justification\":\"why this value and not another, in terms of a measured number\",",
+    "    \"artifact\":     \"testing/evidence/<file> — committed, regenerable, checked by a test\",",
+    "    \"measured_on\":  \"the machine and configuration, or 'deterministic' when the",
+    "                     measurement is a pure function of its inputs and has no machine\",",
+    "    \"sprint\":       \"CN\"",
+    "  }"
+  ],
+  "schema_version": 2,
+
+  "constants": [
+    {
+      "name": "CACHE_BYTES",
+      "value": 1048576,
+      "location": "crates/schweep-state/src/redb_backend.rs",
+      "steers": "redb's in-memory page cache, per operator backend. It is the dominant term in the engine's resident memory when state is spilled to disk.",
+      "justification": "Measured on the C8 ceiling shape, which drives operator state to hundreds of megabytes on disk and samples RSS throughout. At 1 / 8 / 32 MiB the peak resident memory was 38 / 67 / 106 MB and the post-warm-up growth 16.8% / 37.0% / 114.9% — the cache is not a small term, it is THE term. 1 MiB is chosen because the cache is per-operator, so a dataflow with twenty stateful operators holds twenty of them: at 1 MiB that is 20 MiB, a small share of any ceiling this gate runs at, and the measured curve then converges: at the committed setting the artifact records a peak of 38,371,328 bytes of RSS against 1,077,944,320 bytes of state, a ratio of 28.1 to 1, with post-warm-up RSS growth of -1.75% while state grew 700%. What this value is NOT chosen for is read throughput, which C10 owns and will trade against this number with a benchmark rather than an argument.",
+      "artifact": "testing/evidence/c8-cache-sweep.json",
+      "measured_on": "Apple M-series laptop, macOS, release profile, single-threaded. Machine-dependent: RSS is an allocator and kernel figure, so this artifact is NOT recomputed by a test. The deterministic half of the C8 measurements — bytes on disk — is in c8-state-costs.json and IS recomputed.",
+      "sprint": "C8"
+    },
+    {
+      "name": "BYTES_PER_ENTRY_LOW",
+      "value": 48,
+      "location": "crates/schweep-memo/src/costs.rs",
+      "steers": "The floor EXPLAIN STATE publishes for a given entry count, and therefore what the reconciliation gate asserts the backend must occupy at least.",
+      "justification": "Measured: at scale a redb entry costs between 72 and 205 bytes on disk depending on key width (12 measurements, two key widths, 100 to 500,000 entries). 48 sits below the narrowest of those with margin, so the floor is a bound rather than a fit. It is a floor and not half of an envelope because there is NO upper bound to publish: key width is unbounded, and the ceiling gate proved it by reaching 2,556 bytes per entry with a 480-character padding column.",
+      "artifact": "testing/evidence/c8-state-costs.json",
+      "measured_on": "deterministic — a redb file's size is a function of what was written into it, so this artifact is recomputed and compared by testing/differential/tests/evidence.rs",
+      "sprint": "C8"
+    },
+    {
+      "name": "BYTES_PER_BACKEND",
+      "value": 1056768,
+      "location": "crates/schweep-memo/src/costs.rs",
+      "steers": "What EXPLAIN STATE allows an EMPTY set of backends to occupy, and therefore the presence half of the reconciliation gate: reporting no entries while the disk holds more than this is a lie the gate catches.",
+      "justification": "Measured: a freshly created redb file preallocates 1,056,768 bytes. The first draft of this constant guessed 12,288 — a hundredfold error, corrected by the measurement. It is charged only to the empty allowance and not to the floor, because redb truncates on commit: at 1,500 entries the same file measures 593,920 bytes, SMALLER than when empty, so a floor that charged the preallocation would claim a minimum the store routinely goes below.",
+      "artifact": "testing/evidence/c8-state-costs.json",
+      "measured_on": "deterministic — see above",
+      "sprint": "C8"
+    },
+    {
+      "name": "WARM_UP_SAMPLES",
+      "value": 48,
+      "location": "testing/soak/src/rss.rs",
+      "steers": "How much of the ceiling gate's RSS curve is excluded as warm-up before flatness is asserted. Too large and a leak hides inside it; too small and the gate fails for starting up.",
+      "justification": "Measured on the ceiling shape: resident memory climbs from 6 MiB to about 34 MiB over roughly the first forty epochs — redb's page cache filling toward its bound — and is then flat for the remaining 270 epochs of a run that took operator state to 1.08 GB. 48 is above the measured forty with margin. It is a fixed COUNT rather than a fraction because the climb is a fixed duration: a fraction would exclude too little on a short run and far too much on a long one.",
+      "artifact": "testing/evidence/c8-cache-sweep.json",
+      "measured_on": "Apple M-series laptop, macOS, release profile. Machine-dependent, like every RSS figure.",
+      "sprint": "C8"
+    },
+    {
+      "name": "DEFAULT_SOURCE_QUEUE_BOUND",
+      "value": 64,
+      "location": "crates/schweep-server/src/admission.rs",
+      "steers": "Batches one source may have queued and unsealed before ingest is refused with the one retryable error kind. It governs fairness and latency, not memory.",
+      "justification": "Measured, and the measurement is why there is a second constant next to it. At the widest batch c9-bounds.json measures — 1,000 rows with a 480-byte column, 514,051 bytes — 64 batches would be 32,899,264 bytes queued for ONE source, and a client sending wider rows makes that figure whatever it likes: a count bound does not bound memory. So the count keeps its own job, which is that a batch waiting behind 64 others belongs to a client that should have been slowed sooner, and DEFAULT_SOURCE_QUEUE_BYTES bounds the memory. The two meet where the measurement says they should: at a narrow 100-row batch (3,451 bytes) the count fires first, at 220,864 bytes held; at the widest measured batch the byte bound fires first, after 16 batches.",
+      "artifact": "testing/evidence/c9-bounds.json",
+      "measured_on": "deterministic — a framed record's length is a pure function of its contents, so this artifact is recomputed and compared by testing/differential/tests/evidence.rs",
+      "sprint": "C9"
+    },
+    {
+      "name": "DEFAULT_SOURCE_QUEUE_BYTES",
+      "value": 8388608,
+      "location": "crates/schweep-server/src/admission.rs",
+      "steers": "Bytes one source may have queued and unsealed. This is the bound that makes 'bounded queue' a statement about memory rather than about batch count.",
+      "justification": "8 MiB per source. Chosen against the measured batch sizes in c9-bounds.json: it admits 16 of the widest measured batch (514,051 bytes each) and far more than the count bound allows of a narrow one (3,451 bytes), so small batches are governed by count and large ones by bytes. It exists at all because measuring the count bound showed it admits 64 batches of ANY size — I-9's definition of an undeclared unbounded state — and a batch larger than this whole budget is Refused rather than Overloaded, because the retryable kind must mean a retry can succeed.",
+      "artifact": "testing/evidence/c9-bounds.json",
+      "measured_on": "deterministic — see DEFAULT_SOURCE_QUEUE_BOUND",
+      "sprint": "C9"
+    },
+    {
+      "name": "SUBSCRIPTION_RING",
+      "value": 256,
+      "location": "crates/schweep-server/src/engine.rs",
+      "steers": "Sealed epochs' deltas one standing query retains for subscribers. A token behind the ring is refused (D-23), so this is also how far behind a subscriber may fall before it must re-baseline.",
+      "justification": "256 epochs of history, which at the widest delta c9-bounds.json measures — 1,000 answer rows changing value, producing an addition and a retraction each, 31,780 bytes — is 8,135,680 bytes retained for one query. That figure is what set SUBSCRIPTION_RING_BYTES: the byte bound is 8 MiB, just above it, so the two bounds meet at the measured worst case and a narrow query keeps its full 256 epochs (263 of the widest delta would fit, so the count is what fires) while a pathologically wide one keeps fewer epochs rather than unbounded memory.",
+      "artifact": "testing/evidence/c9-bounds.json",
+      "measured_on": "deterministic — a rendered delta's length is a pure function of the two answers it is the difference of",
+      "sprint": "C9"
+    },
+    {
+      "name": "SUBSCRIPTION_RING_BYTES",
+      "value": 8388608,
+      "location": "crates/schweep-server/src/engine.rs",
+      "steers": "Bytes of retained deltas one standing query keeps. The ring evicts its oldest epoch when either bound is exceeded.",
+      "justification": "8 MiB, set from the count bound's own worst case: 256 epochs of the widest measured delta is 8,135,680 bytes, and this sits just above it. Its reason for existing is the same discovery as on the ingest side — a delta is as large as the change it describes, and a change can be as large as the answer, so counting epochs bounds history and not memory. With both bounds a query's retained deltas are bounded in the unit that matters, and the eviction path is the one D-23 already specifies: the oldest epoch leaves the ring and a token behind it is refused, never served a re-baseline dressed as a delta.",
+      "artifact": "testing/evidence/c9-bounds.json",
+      "measured_on": "deterministic — see SUBSCRIPTION_RING",
+      "sprint": "C9"
+    },
+    {
+      "name": "PER_EPOCH_BUDGET_BYTES",
+      "value": 4096,
+      "location": "testing/soak/tests/c9_server_soak.rs",
+      "steers": "The resident growth per epoch the C9 soak accepts, and therefore the size of per-epoch leak it catches in a running schweepd.",
+      "justification": "Measured by attribution, in c9-soak.json. With ingest and seal alone — no registration, no reads — a schweepd grows 1,589 bytes an epoch, which is schweep_log::Log holding every sealed batch resident plus one dedup token per append. Adding the registration, a read every epoch, a subscribe every third and a register/deregister pair every hundredth adds 159 to 177 bytes, within the noise of the first figure; at the committed shape the total is 1,513 to 1,810 bytes an epoch over three runs. 4 KiB is more than twice the top of that range, which tolerates an allocator that rounds differently while failing a 20 KB-an-epoch leak by a factor of five. It is a per-epoch COEFFICIENT and not a flatness threshold on purpose: a server's resident memory is O(retained log), so a flat curve is not available to assert until the log holds an index instead of the batches (C10).",
+      "artifact": "testing/evidence/c9-soak.json",
+      "measured_on": "Apple M-series laptop, macOS, release profile. Machine-dependent: RSS is an allocator and kernel figure, so this artifact is NOT recomputed by a test.",
+      "sprint": "C9"
+    },
+    {
+      "name": "HISTORY_RESIDENCY_SHARE",
+      "value": 0.05,
+      "location": "testing/soak/tests/c10_log_residency.rs",
+      "steers": "How much of an added history the log may hold resident before the C10 residency gate fails. It is the threshold that defines what 'the log does not hold its history' means as a number.",
+      "justification": "Measured on both sides of the change, in c10-residency.json. The design this replaces held the batches, so its share was approximately 1.0 — any threshold below a half would have failed it. Five percent rather than one, because the figure has to leave room for what legitimately does grow: 16 bytes of span index per epoch, one dedup token per acknowledged append, and the allocator's own behaviour. Measured after the change: 226,226,474 extra bytes of history cost 3,457,024 bytes of resident memory, 1.53% — inside the gate by a factor of three, and outside the pre-C10 figure by a factor of sixty.",
+      "artifact": "testing/evidence/c10-residency.json",
+      "measured_on": "Apple M-series laptop, macOS, release profile. Machine-dependent: RSS is an allocator and kernel figure, so this artifact is NOT recomputed by a test. The gate asserts a share rather than a value for that reason.",
+      "sprint": "C10"
+    },
+    {
+      "name": "SLOW_CONSUMER_BUDGET_BYTES",
+      "value": 33554432,
+      "location": "testing/soak/tests/c9_server_soak.rs",
+      "steers": "The resident memory the slow-consumer gate accepts while nothing is being sealed, and therefore whether that gate can see unbounded buffering at all.",
+      "justification": "Measured on both sides of the mutation, in c9-soak.json: 18.8 to 19.1 MB with backpressure in force and 45,940,736 bytes with it removed. 32 MiB sits between them. The first version of this constant was 160 MiB, and the mutation passed it — the refusal count caught the leak and the budget, which is the instrument §6 C9 asks for, watched it happen. A budget above every possible failure is not a budget.",
+      "artifact": "testing/evidence/c9-soak.json",
+      "measured_on": "Apple M-series laptop, macOS, release profile. Machine-dependent: RSS is an allocator and kernel figure, so this artifact is NOT recomputed by a test.",
+      "sprint": "C9"
+    },
+    {
+      "name": "INPUT_MULTIPLIER",
+      "value": 3,
+      "location": "testing/soak/tests/c9_memo_ceiling.rs",
+      "steers": "How much larger than the cgroup ceiling the accumulated input is in the C9 memo-ceiling gate, and therefore the strength of the claim that gate makes.",
+      "justification": "Three, where C8's state multiplier is ten, and the difference is what is being claimed. C8's ten is about STATE, which redb spills, and a large multiple establishes that the spill works. This gate's claim is about INPUT that a catch-up streams past, where the honest statement is 'more than the process may hold' — three times establishes it, and thirty times would only establish that the test can write a bigger file. Measured in CI under the real 128 MiB cgroup: 402,653,184 bytes of accumulated input targeted and streamed across 523 epochs, 1,077,944,320 bytes of operator state built, and a catch-up whose peak resident memory was 14,729,216 bytes — 26:1 against the input — with 139,952 bytes of growth, 0.03% of the input. On a developer machine without a cgroup the same shape peaks at 44 to 55 MB and grows 0% to 3.1%; the CI figure is the gate's, per C8's precedent.",
+      "artifact": "testing/evidence/c9-memo-ceiling.json",
+      "measured_on": "Apple M-series laptop, macOS, release profile, single-threaded, no cgroup ceiling (the smoke shape). Machine-dependent: RSS is an allocator and kernel figure, so this artifact is NOT recomputed by a test.",
+      "sprint": "C9"
+    },
+    {
+      "name": "SMOKE_RSS_BUDGET_BYTES",
+      "value": 100663296,
+      "location": "testing/soak/tests/c8_ceiling.rs",
+      "steers": "The resident-memory budget the ceiling gate holds itself to when no cgroup ceiling is in force. Under a ceiling the kernel enforces the same thing harder.",
+      "justification": "Measured: the clean run peaks at 38-39 MB of resident memory whether operator state on disk is 538 MB or 1.08 GB — the footprint does not track the state at all. 96 MiB is two and a half times that, leaving room for a slower allocator and a different machine. It is the instrument that actually catches a leak: an injected per-step leak took the peak to 214 MB and the SHAPE check passed it, because the machine was under memory pressure and the OS reclaimed the leaked pages half-way through, so the curve climbed 6 to 214 MiB and fell back to 160 and the quartile means came out 1% apart. A shape can be flattened by the kernel; an absolute budget cannot.",
+      "artifact": "testing/evidence/c8-cache-sweep.json",
+      "measured_on": "Apple M-series laptop, macOS, release profile. Machine-dependent, like every RSS figure.",
+      "sprint": "C8"
+    },
+    {
+      "name": "ceiling gate thresholds",
+      "value": "RSS growth after warm-up <= 10%, and RSS growth * 5 <= state growth",
+      "location": "testing/soak/tests/c8_ceiling.rs",
+      "steers": "What the C8 ceiling gate accepts as flat memory.",
+      "justification": "Measured across 266 post-warm-up samples of a 313-epoch run: operator state grew +700% while resident memory grew -1.75% — it fell. An earlier run of the same shape measured +4.2%, so the threshold is set above the worse of the two observations rather than the flattering one. The 10% threshold is above the observed 4.2% with room for a slower machine and a different allocator. The ratio test is the one that carries the sprint's actual claim, because 'flat' cannot mean 'never rises': the sampler's resolution is a mebibyte and a bounded cache converging on its limit drifts within that. A leak proportional to state shows the two rates equal and fails the ratio test even when its total sits under the threshold.",
+      "artifact": "testing/evidence/c8-cache-sweep.json",
+      "measured_on": "Apple M-series laptop, macOS, release profile.",
+      "sprint": "C8"
+    }
+  ],
+
+  "generator_constants": [
+    {
+      "name": "KEY_DOMAIN",
+      "value": [0, 2],
+      "location": "testing/differential/src/scenario.rs",
+      "steers": "The range of values in the `id` column, which is the column every generated join joins on.",
+      "justification": "The join-key domain sets how often two tables share a key at all. Measured at the committed artifact: of 371 join-family scenarios where both tables ended up populated, 251 produced a non-empty bare join. Before narrowing the domain the same measurement read 69 of 141 — under half — so most join scenarios were comparing two empty answers, which agree no matter how broken either side is. Three values is the smallest domain that still lets a null key, a matching key, and a non-matching key all occur.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C0"
+    },
+    {
+      "name": "operation weighting",
+      "value": "3/8 insert, 1/8 duplicate, 2/8 retract, 1/8 update, 1/8 churn",
+      "location": "testing/differential/src/scenario.rs, generate_operation",
+      "steers": "Whether tables accumulate rows over a scenario or hover near empty.",
+      "justification": "With insertions and retractions balanced, a table stays near empty: joins find nothing, groups hold one row, and the suite spends its epochs comparing empty answers. Insertions outnumber retractions 3:2 so tables grow. Retractions remain a quarter of all operations outright, and update and churn carry negative weights too — measured at the artifact, 808 of 1,000 scenarios contain a retraction and 377 contain one in epoch one. The §6 C0 bar is that retractions are present from epoch one; this raises coverage without lowering that bar.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C0"
+    },
+    {
+      "name": "operations per table per epoch",
+      "value": "1..=3",
+      "location": "testing/differential/src/scenario.rs, generate_epochs",
+      "steers": "How much each non-empty epoch changes.",
+      "justification": "The lower bound was 0, which allowed a scenario to seal eight epochs and still hold no data. A run over an empty table proves nothing about a join or an aggregate. At least one operation per table per non-empty epoch guarantees the scenario is about something.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C0"
+    },
+    {
+      "name": "empty-epoch rate",
+      "value": "1/6",
+      "location": "testing/differential/src/scenario.rs, generate_epochs",
+      "steers": "How often a sealed epoch carries no changes at all.",
+      "justification": "§7 requires empty epochs: the answer must not move across one. Measured at the artifact, 647 of 1,000 scenarios contain at least one, which is ample for `an_empty_epoch_never_changes_the_answer` to have something to check in every family.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C0"
+    },
+    {
+      "name": "empty-input rate",
+      "value": "1/8",
+      "location": "testing/differential/src/scenario.rs, generate_epochs",
+      "steers": "How often a whole scenario carries no data at all.",
+      "justification": "§7 requires empty inputs — an engine that is wrong on an empty input is wrong before it starts. Measured at the artifact, 150 of 1,000. Higher would waste the sweep on the least informative case; zero would drop a case §7 names.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C0"
+    },
+    {
+      "name": "predicate depth and connective weighting",
+      "value": "depth 1 (depth 2 one time in four); OR twice as likely as AND, NOT least likely",
+      "location": "testing/differential/src/scenario.rs, generate_query and generate_predicate",
+      "steers": "How selective a generated WHERE clause is.",
+      "justification": "Each level of AND roughly halves the rows that survive, and a filter admitting nothing turns the scenario into an expensive way of comparing two empty answers. Nesting still occurs; it is not the default shape.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C0"
+    },
+    {
+      "name": "comparison operator weighting",
+      "value": "equality weight 1, each inequality weight 2",
+      "location": "testing/differential/src/scenario.rs, generate_comparison",
+      "steers": "How many rows a generated comparison admits.",
+      "justification": "Over a domain of a handful of values, `= literal` admits roughly one row in six while `<= literal` admits about half. Equality is kept because joins and group keys need it, but weighting toward the inequalities keeps answers non-empty often enough to be worth comparing.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C0"
+    },
+    {
+      "name": "typed-NULL comparison rate",
+      "value": "1/16",
+      "location": "testing/differential/src/scenario.rs, generate_comparison",
+      "steers": "How often a comparison is against a typed NULL, making the whole predicate NULL.",
+      "justification": "Comparing to NULL makes the predicate admit nothing (S-13), so as a top-level filter it empties the scenario. It is generated because 'neither matches nor complements' (S-17) is real behaviour worth covering, but rarely, because every occurrence costs a scenario.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C0"
+    },
+    {
+      "name": "column-divisor rate",
+      "value": "2/3 of generated divisions divide by a column rather than a non-zero literal",
+      "location": "testing/differential/src/scenario.rs, generate_expr",
+      "steers": "How often a generated expression can raise DivisionByZero (S-21).",
+      "justification": "Until C3 the generator never raised, because the oracle and the engine disagreed about what an error meant to a standing query and both gates had to assert that none occurred. D-16 settled that (an error is a property of the contents, S-22), so raising expressions belong in the population. Measured at the regenerated artifact: 14 of 1,000 scenarios raise, across 35 comparisons, and both implementations agreed at every one. The rate is set by how often arithmetic appears at all rather than by this knob — raising the column-divisor rate from 1/3 to 5/6 moved the scenario count only from 14 to 15 — so it sits at a middle value and the specific error behaviours are pinned by handwritten scenarios instead.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C3"
+    },
+    {
+      "name": "extreme integer literal rate",
+      "value": "1/12 of Int64 literals are i64::MAX",
+      "location": "testing/differential/src/scenario.rs, literal_of",
+      "steers": "Whether +, -, * and SUM can overflow (S-20, S-30).",
+      "justification": "One kind of live error would never exercise S-22c's rule that the least message wins when several are live. An occasional i64::MAX literal gives a second kind — ArithmeticOverflow and AggregateOverflow alongside DivisionByZero — without touching the column value domain, which stays small so that collisions remain likely.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C3"
+    },
+    {
+      "name": "null rate in generated values",
+      "value": "1/4 for nullable columns",
+      "location": "testing/differential/src/scenario.rs, generate_value",
+      "steers": "How much three-valued logic the scenarios exercise.",
+      "justification": "Nulls are the common case in this dialect, not the exception (S-13…S-18): they change comparison, grouping, aggregation, and joins, each differently. A quarter is frequent enough that every null-sensitive rule is hit across a sweep, without making the data mostly absent.",
+      "artifact": "testing/evidence/c0-generator-coverage.json",
+      "measured_on": "deterministic — a pure function of the seed range, no timing and no threads",
+      "sprint": "C0"
+    }
+  ]
+}

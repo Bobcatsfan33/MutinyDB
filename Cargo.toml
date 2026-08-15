@@ -1,12 +1,14 @@
 # MutinyDB — the workspace.
 #
-# It carries NO ENGINE CODE, deliberately, and carries none until M1.
+# It carries no admitted engine crate until M1. Exact, quarantined source imports live under
+# `components/` from the M0 reset onward; MD-6 and components.lock.json keep source presence
+# separate from product admission.
 #
 # CONSOLIDATION-ROADMAP.md §4 M0 says the exit gate is "CI skeleton (fmt/clippy/test/no-egress)
 # green on an empty workspace" — the seam is wired before the code arrives, so M1's first commit
 # inherits a gate that is already red-if-broken rather than one written to fit whatever it built.
-# M0 writes decision records and nothing else: no bridge code (M1), no operators (M2), no mounted
-# planes (M3).
+# M0 writes decision records and imports exact source trees: no bridge code (M1), no operators
+# (M2), no mounted planes (M3), and no product dependency on a quarantined component.
 #
 # `members` is not literally empty, because a literally empty virtual workspace is not something
 # cargo can act on: `cargo fmt --all` exits 1 with "Failed to find targets", and clippy and test
@@ -19,7 +21,7 @@
 # and test something real to be green *about*.
 #
 # What this file is allowed to grow, and when:
-#   M1  crates/mutiny-bridge         substrate commit stream -> Current epoch inputs (MD-2)
+#   M1  crates/mutiny-bridge         substrate commit stream -> Schweep epoch inputs (MD-2)
 #   M2  crates/mutiny-semantic       Prism's operators inside the compute plane
 #   M3  crates/mutiny-trust          Loom's planes mounted over the shared catalog
 #   M6  crates/mutinyd               the one process, the three doors
@@ -28,14 +30,14 @@
 resolver = "3"
 members = ["crates/mutiny-charter"]
 
-# Every sibling repository consumes its dependencies by pinned tag, never by branch and never by
-# fork (§6, R-4). This section is the place those pins will live, and it is empty for the same
-# reason `members` is: M0 takes no dependency on anything.
+# MD-6 replaces the sibling/tag topology with workspace-local component source. This section is
+# still empty because M0 admits no component. M1 adds only paths inside this repository after the
+# corresponding release and composed gates remove the component's lock blockers.
 [workspace.dependencies]
 
 # The lints M1's crates inherit with `[lints] workspace = true`. They are stated here, in the
 # phase that has no code, because a lint added after the code exists is a lint that gets
-# `#[allow]`d instead of obeyed. Current's D-1 discipline, adopted verbatim: no unsafe, and no
+# `#[allow]`d instead of obeyed. Schweep's D-1 discipline, adopted verbatim: no unsafe, and no
 # panicking constructs in library code.
 [workspace.lints.rust]
 unsafe_code = "forbid"

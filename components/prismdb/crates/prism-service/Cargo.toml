@@ -1,0 +1,24 @@
+[package]
+name = "prism-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Authenticated, tenant-scoped PrismDB API service."
+
+[[bin]]
+name = "prismd"
+path = "src/main.rs"
+
+[dependencies]
+prism-types = { workspace = true }
+prism-engine = { workspace = true }
+rustls = { workspace = true }
+signal-hook = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+prism-part = { workspace = true }
+prism-types = { workspace = true }

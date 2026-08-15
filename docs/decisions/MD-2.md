@@ -13,7 +13,7 @@ is renamed to SCHWEEP by its own D-21 (MD-4 addendum); until that tag exists, M1
 
 K-1 is the keystone: *every incremental engine's weak point is change capture; substrate emits
 deltas as a physical byproduct of committing.* This record fixes the exact mapping from a substrate
-commit plus a Loom write envelope to a Current epoch input, so that M1 builds a translation and not
+commit plus a Loom write envelope to a Schweep epoch input, so that M1 builds a translation and not
 a design.
 
 The three sides, as they exist today at their pinned versions — read from the code, not from
@@ -34,7 +34,7 @@ without an envelope** — enforced at the write entry point, not as middleware, 
 `derived_from` is *engine-captured*: callers may add external sources, they may not omit what they
 read, because an agent must not be able to launder a derivation by declining to mention it.
 
-**Current, at C4.** `Log::append(source_id: &str, table: &str, entries: Vec<(Row, i64)>,
+**Schweep, at C4.** `Log::append(source_id: &str, table: &str, entries: Vec<(Row, i64)>,
 dedup_token: &str) -> Result<Ack>`, `Ack::{Appended, DroppedAsReplay}`; the same token with the
 same content is a replay that is acknowledged and dropped, the same token with different content is
 refused loudly (I-4). `seal_epoch() -> Result<Epoch>`; epochs are dense integers from 1.
@@ -89,7 +89,7 @@ delete, it makes "as of commit X" un-askable, and it gives MD-3's `AS OF` nothin
 
 ### Option B2 — Epoch = commit, one epoch stream per tenant store
 
-Each commit to a tenant's substrate store becomes exactly one Current epoch, in WAL order. `AS OF`
+Each commit to a tenant's substrate store becomes exactly one Schweep epoch, in WAL order. `AS OF`
 resolves against a real commit; the durability boundary and the visibility boundary are the same
 boundary.
 
@@ -101,7 +101,7 @@ admission control, and it is the cost of the property.
 
 Since a session is a branch (a substrate fork), give each branch its own epoch stream.
 
-Rejected for v1. Current is single-writer with one epoch clock (its §8 non-goals), and per-branch
+Rejected for v1. Schweep is single-writer with one epoch clock (its §8 non-goals), and per-branch
 clocks would make cross-branch queries a distributed-time problem before M5 has even proven the
 fork mechanism. A tenant store has one WAL and therefore one total order over every commit on every
 branch in that store — that order is the epoch clock, and `branch` becomes a tag on the delta
@@ -109,7 +109,7 @@ rather than a second clock.
 
 ### Option C1 — `source_id` = the single source the write derived from
 
-Map `envelope.derived_from[0]` into Current's `source_id`, and taint by retracting that source.
+Map `envelope.derived_from[0]` into Schweep's `source_id`, and taint by retracting that source.
 
 Simple, and lossy in exactly the case that matters. `derived_from` is a *vector* because an agent's
 claim routinely derives from several reads. Picking one makes `taint(S)` miss every fact where S was
@@ -130,7 +130,7 @@ not a state the model has. Also multiplies the delta volume by the fan-out of de
 envelope-to-source edges are ingested as an ordinary relation, `mutiny_derivation`, maintained by
 the same bridge on the same epoch clock. `taint(S)` then resolves the affected keys through that
 relation — itself a standing query, incrementally maintained — and issues source-scoped retraction
-over those keys via Current's C11 `retract_source(source_id, predicate?)`.
+over those keys via Schweep's C11 `retract_source(source_id, predicate?)`.
 
 Multi-source derivation survives intact; the resolution of "what is downstream of S" becomes engine
 physics rather than a DAG walk, which is precisely K-2's claim; and the derivation edges become
@@ -181,7 +181,7 @@ struct BridgeDelta {
 }
 ```
 
-And the relation the bridge maintains alongside every payload table — an ordinary Current table,
+And the relation the bridge maintains alongside every payload table — an ordinary Schweep table,
 ingested through the ordinary path, on the same epoch:
 
 ```
@@ -212,13 +212,13 @@ stays true.
   behind a feature flag and not for tests — test fixtures construct real envelopes.
 - **R3 · Exactly-once by content address.** `dedup_token = "<commit_hex>/<table>"`. This is not an
   arbitrary token: it is derived from substrate's content address, so a commit replayed after a
-  crash presents the *same* token with the *same* content and Current answers `DroppedAsReplay`
-  (I-4). If the same token ever arrives with different content, Current refuses loudly — which is
+  crash presents the *same* token with the *same* content and Schweep answers `DroppedAsReplay`
+  (I-4). If the same token ever arrives with different content, Schweep refuses loudly — which is
   exactly right, because that means a `ManifestId` collided or the write-set capture is
   nondeterministic, and both are catastrophic rather than retryable.
 - **R4 · Determinism at the seam.** Tables within a commit are appended in `BTreeMap` order,
   entries within a table in canonical row order, `derived_from` sorted by `(system, record_id)`.
-  No wall clock and no randomness anywhere in the bridge (Current D-6, substrate's own rule).
+  No wall clock and no randomness anywhere in the bridge (Schweep D-6, substrate's own rule).
   `Manifest::created_at_ms` is carried into the catalog for `AS OF TIME` (MD-3) and is **never**
   used to make a bridge decision — substrate's manifest doc says why, and the reason is that an
   operator moving the clock must not be able to break the engine.
@@ -232,14 +232,14 @@ stays true.
   easiest thing to get wrong later: anything that reads `source_id` and calls it provenance is a
   bug.
 - **R7 · Branch is a tag, not a clock.** Every delta carries `branch`; branch-scoped circuits filter
-  on it. One epoch clock per tenant store (B2/B3), for as long as Current is single-writer.
+  on it. One epoch clock per tenant store (B2/B3), for as long as Schweep is single-writer.
 - **R8 · The bridge is the only writer into the compute plane.** No plane appends to the log
   directly. MD-1 R1 makes this structural (`compute → bridge`, and nothing else reaches storage),
   and it is what makes R2 unbypassable.
 
-### What this asks of Current, on Current's own track
+### What this asks of Schweep, on Schweep's own track
 
-Recorded here because MD-1 R4 forbids MutinyDB from reaching into Current, and an unrecorded
+Recorded here because MD-1 R4 forbids MutinyDB from reaching into Schweep, and an unrecorded
 dependency is a surprise waiting for M1. **All three have been scheduled on the engine's track; the
 dispositions are in Consequences below, and they are what M1 inherits.**
 
@@ -251,16 +251,16 @@ dispositions are in Consequences below, and they are what M1 inherits.**
    amended and M4 gets more expensive, not impossible.
 3. **A multi-append-then-seal admission API is desirable but not required.** R1 can be satisfied by
    the bridge calling `append` N times and then `seal_epoch`, provided nothing else can seal
-   concurrently — which R8 guarantees. If Current later offers a transactional multi-table append,
+   concurrently — which R8 guarantees. If Schweep later offers a transactional multi-table append,
    the bridge adopts it and R1 gets cheaper to prove.
 
 ### The M1 exit gate this contract must survive
 
 Unchanged from the roadmap, restated in this record's terms: a randomized commit history replayed
-through the bridge yields byte-identical Current state to a direct-ingest control, and the crash
+through the bridge yields byte-identical Schweep state to a direct-ingest control, and the crash
 matrix is green across the seam — kill the process at every boundary between "substrate commit
 durable" and "epoch sealed", and prove the recovered state equals the never-crashed twin. R3 is what
-makes that provable: after a crash, the bridge re-offers the same tokens and Current drops the
+makes that provable: after a crash, the bridge re-offers the same tokens and Schweep drops the
 replays.
 
 ## Consequences
@@ -290,7 +290,7 @@ became a change this repository asks a sibling to make on MutinyDB's behalf (§6
   provenance walker, no recall planner in the hot path. The RecallPlan (M4) is generated from the
   propagation receipt, and its two-section honesty is untouched: irreversible actions still cannot
   be retracted by any engine and are still listed first.
-- **The bridge holds the only nondeterminism in the system, and it holds none.** Current's D-6 puts
+- **The bridge holds the only nondeterminism in the system, and it holds none.** Schweep's D-6 puts
   all nondeterminism at the ingest boundary; MD-2 R4 removes it from there too, because the epoch
   assignment is not a choice — it is the commit sequence. Downstream of a sealed epoch, MutinyDB is
   a pure function of the tenant's WAL, which is what makes both the oracle and crash recovery

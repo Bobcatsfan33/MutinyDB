@@ -1,0 +1,346 @@
+{
+  "schemaVersion": 1,
+  "product": "loomDB",
+  "repository": "Bobcatsfan33/loomdb",
+  "assessment": {
+    "asOf": "2026-07-29",
+    "reviewBy": "2026-10-29",
+    "softwareReleaseCandidate": true,
+    "deploymentDecision": "not-approved",
+    "decisionReason": "Blocking external assurance and deployment-specific operating gates remain open."
+  },
+  "frameworks": [
+    {
+      "id": "nist-ssdf-1.1",
+      "name": "NIST SP 800-218 Secure Software Development Framework",
+      "version": "1.1",
+      "url": "https://csrc.nist.gov/pubs/sp/800/218/final"
+    },
+    {
+      "id": "slsa-1.2",
+      "name": "Supply-chain Levels for Software Artifacts",
+      "version": "1.2",
+      "url": "https://slsa.dev/spec/v1.2/"
+    },
+    {
+      "id": "owasp-asvs-5.0.0",
+      "name": "OWASP Application Security Verification Standard",
+      "version": "5.0.0",
+      "url": "https://owasp.org/www-project-application-security-verification-standard/"
+    },
+    {
+      "id": "csa-ccm-caiq-4.1",
+      "name": "CSA Cloud Controls Matrix and CAIQ",
+      "version": "4.1",
+      "url": "https://cloudsecurityalliance.org/artifacts/cloud-controls-matrix-v4-1"
+    },
+    {
+      "id": "nist-ai-rmf-1.0",
+      "name": "NIST Artificial Intelligence Risk Management Framework",
+      "version": "1.0",
+      "url": "https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-ai-rmf-10"
+    },
+    {
+      "id": "csa-ai-caiq-1.0.2",
+      "name": "CSA AI Consensus Assessments Initiative Questionnaire",
+      "version": "1.0.2",
+      "url": "https://cloudsecurityalliance.org/artifacts/ai-consensus-assessments-initiative-questionnaire-ai-caiq"
+    }
+  ],
+  "controls": [
+    {
+      "id": "GOV-01",
+      "title": "Security governance and product boundary",
+      "status": "implemented",
+      "frameworks": [
+        "nist-ssdf-1.1",
+        "nist-ai-rmf-1.0"
+      ],
+      "evidence": [
+        "SECURITY.md",
+        "docs/threat-model.md",
+        "docs/invariants.md"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "SDLC-01",
+      "title": "Secure development and change verification",
+      "status": "implemented",
+      "frameworks": [
+        "nist-ssdf-1.1",
+        "owasp-asvs-5.0.0"
+      ],
+      "evidence": [
+        ".github/CODEOWNERS",
+        ".github/workflows/ci.yml",
+        ".github/workflows/security.yml",
+        "docs/at-map.md"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "APPSEC-01",
+      "title": "Technical security verification",
+      "status": "partial",
+      "frameworks": [
+        "owasp-asvs-5.0.0",
+        "csa-ccm-caiq-4.1"
+      ],
+      "evidence": [
+        "docs/threat-model.md",
+        "docs/at-map.md",
+        ".github/workflows/ci.yml"
+      ],
+      "gaps": [
+        "Commissioned independent penetration test and remediation report are not complete."
+      ]
+    },
+    {
+      "id": "SUPPLY-01",
+      "title": "Release integrity, SBOM, signing, and provenance",
+      "status": "implemented",
+      "frameworks": [
+        "nist-ssdf-1.1",
+        "slsa-1.2",
+        "csa-ccm-caiq-4.1"
+      ],
+      "evidence": [
+        ".github/workflows/release-bundle.yml",
+        ".github/workflows/security.yml",
+        "docs/operations.md"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "IAM-01",
+      "title": "Identity, authorization, and tenant isolation",
+      "status": "partial",
+      "frameworks": [
+        "owasp-asvs-5.0.0",
+        "csa-ccm-caiq-4.1",
+        "csa-ai-caiq-1.0.2"
+      ],
+      "evidence": [
+        "SECURITY.md",
+        "docs/threat-model.md",
+        "docs/at-map.md",
+        "docs/host-profile.md",
+        "deploy/reference/profile.json",
+        "deploy/reference/kubernetes/30-tenant-alpha.yaml",
+        "deploy/reference/systemd/loomd@.service",
+        "scripts/verify_host_profile.py",
+        "crates/loom-mcp/tests/host_profile.rs",
+        "crates/loom-mcp/tests/actor_registry.rs"
+      ],
+      "gaps": [
+        "A supported reference host profile now renders network identity, authenticated TLS, process and filesystem isolation, resource ceilings, default-deny networking, and one-tenant-per-process-and-store routing, gated by scripts/verify_host_profile.py. The deploying organization must still substitute its own trust domain, client identities, artifact digests, and secret material, and no such deployment has been independently assessed.",
+        "loomd now opens its store with Loom::open_production_attested under the reference profile, so writes over the MCP surface are signature-authenticated against a governance-signed actor registry and a declared rollback floor, and a registry that cannot be verified stops startup. What remains deployment-owned is the key material itself: issuing and custodying the actor-governance signing key, distributing and rotating each actor's key, and revoking a compromised one by raising the attested generation. No customer key ceremony or revocation drill has been evidenced."
+      ]
+    },
+    {
+      "id": "CRYPTO-01",
+      "title": "Key management and cryptographic trust",
+      "status": "partial",
+      "frameworks": [
+        "nist-ssdf-1.1",
+        "csa-ccm-caiq-4.1"
+      ],
+      "evidence": [
+        "docs/key-custody.md",
+        "docs/backup-restore.md",
+        "docs/operations.md",
+        "SECURITY.md",
+        "crates/loom-keys/src/register.rs",
+        "crates/loom-keys/src/directory.rs",
+        "crates/loom-keys/src/signer.rs",
+        "crates/loom-keys/src/rotation.rs",
+        "crates/loomctl/tests/key_custody.rs",
+        "crates/loom-mcp/tests/actor_registry.rs",
+        "docs/design/backup-signature-v2.md",
+        "docs/drills/kms-roundtrip.json",
+        "deploy/reference/trust-roots/README.md",
+        "crates/loom-keys/src/aws_kms.rs",
+        "crates/loom-keys/tests/provisioned_register.rs"
+      ],
+      "gaps": [
+        "All three signing roles - actor-governance, release, and backup-root - now verify through a named trust-root register rather than a bare public key: key id, algorithm, and role are bound into the verification path, and a revoked key is refused by name even though its material still verifies. The expand/activate/drill/revoke rotation sequence is implemented and exercised, dual control gates the two transitions that change what verifies, and every refusal is separately named. loomd verifies its actor-registry attestation through custody at startup.",
+        "EVERY KEY EXERCISED WAS SOFTWARE-BACKED. No hardware ceremony has been run, no key is non-exportable, and no receipt in this repository was produced by an HSM or KMS. Signer receipts record the backend that produced them precisely so a software drill cannot be mistaken for hardware custody; the drill output says so in its own text. EXT-HSM is unchanged and open.",
+        "SUPERSEDED (recorded so the trail is followable): an earlier assessment held that AWS KMS offered RSA and ECDSA asymmetric keys only, making an Ed25519 product need CloudHSM or an algorithm migration. That was out of date - KMS added Ed25519 (ECC_NIST_EDWARDS25519 / ED25519_SHA_512 / MessageType RAW) on 2025-11-07, which is byte-compatible with what this codebase verifies. No algorithm migration was ever required. See docs/key-custody.md section 5 item 3.",
+        "AWS KMS is wired as a signer backend and exercised against the real service on 2026-08-02. Two keys are provisioned and registered by ARN with their exported public keys pinned to the SPKI SHA-256 from the provisioning record: actor-governance (e8f90cea) and release (41a38c5d), both ECC_NIST_EDWARDS25519 / SIGN_VERIFY. A real kms:Sign with ED25519_SHA_512 and MessageType RAW was performed against each and each signature VERIFIED OFFLINE against the registered public key, with a tampered-message negative control refused. Only read-only calls were made (sts:GetCallerIdentity, kms:GetPublicKey, kms:Sign); nothing in AWS was created or modified. The backup signing payload was reduced from 5,680 bytes to 95 by signature format v2 so the third role can use the same custody; backup-root has no key yet and is deliberately absent from the register. DECOMMISSIONED 2026-08-08: the AWS account 913524920694 was closed and both keys were destroyed with it, before any ceremony, any activation, and any signature over a real artifact. deploy/reference/trust-roots/production.json was REMOVED rather than marked revoked, because loom-keys refuses a revoked entry with no recorded approvers and writing approvers for a ceremony that never happened would be fabricated evidence. The exported public halves are retained as deploy/reference/trust-roots/*.der so the round-trip receipt stays checkable, and docs/drills/kms-roundtrip.json now carries a decommissioned block that a test asserts is present.",
+        "EXT-HSM REMAINS OPEN AND NOTHING HERE IS A CEREMONY. Both registered keys are status 'pending' with zero recorded approvals: they authorize nothing, cannot sign through the directory, and activation is refused by the dual-control check. What has not happened: the witnessed dual-control ceremony, activation of any key, a rotation drill against KMS, and a revocation exercise. The probe was run by the account root (arn:aws:iam::913524920694:root) rather than a dedicated ceremony principal, which is recorded in docs/drills/kms-roundtrip.json rather than omitted; a separate ceremony principal is itself an EXT-HSM prerequisite. Phase 2 - creating the backup-root key and the all-three-keys ceremony - is the PKI owner's action.",
+        "CURRENT RELEASE CUSTODY IS SOFTWARE-BACKED AND WEAKER THAN WHAT WAS PROVISIONED. Release bundles are signed by an Ed25519 key generated with `loom-bundle-tool keygen` and held as the GitHub Actions secret LOOM_BUNDLE_SIGNING_KEY, with its public half in the repository variable LOOM_BUNDLE_PUBLIC_KEY. That key is exportable by construction, is readable by any workflow in its environment and by anyone who can change one, and has no dual control, no attestation, and no hardware boundary. It is appropriate for signing an open-source release candidate and is not appropriate for a product handling customer data. EXT-HSM is open and is further from closed than it was on 2026-08-02."
+      ]
+    },
+    {
+      "id": "DATA-01",
+      "title": "Data protection, privacy, and retention",
+      "status": "partial",
+      "frameworks": [
+        "csa-ccm-caiq-4.1",
+        "csa-ai-caiq-1.0.2",
+        "nist-ai-rmf-1.0"
+      ],
+      "evidence": [
+        "docs/threat-model.md",
+        "docs/backup-restore.md",
+        "docs/at-map.md"
+      ],
+      "gaps": [
+        "Encryption at rest/in transit, retention, deletion, residency, and privacy notices are host or managed-service responsibilities."
+      ]
+    },
+    {
+      "id": "RES-01",
+      "title": "Backup, recovery, and resilience",
+      "status": "partial",
+      "frameworks": [
+        "csa-ccm-caiq-4.1"
+      ],
+      "evidence": [
+        "docs/backup-restore.md",
+        "docs/operations.md",
+        "docs/host-profile.md",
+        ".github/workflows/ci.yml",
+        "scripts/backup_operations.py",
+        "scripts/verify_host_profile.py",
+        "deploy/reference/profile.json",
+        "deploy/reference/kubernetes/40-backup-alpha.yaml",
+        "deploy/reference/systemd/loomd-backup@.timer",
+        "crates/loomctl/src/retention.rs",
+        "crates/loomctl/src/receipt.rs",
+        "crates/loomctl/tests/backup_operations.rs",
+        "docs/drills/README.md",
+        "docs/drills/local-filesystem-copy-clone.json",
+        "crates/loom-drill/src/lib.rs",
+        "crates/loom-drill/src/receipt.rs",
+        "crates/loom-drill/src/incident.rs",
+        "crates/loom-drill/tests/recovery_drill.rs",
+        "crates/loom-drill/tests/fault_injection.rs"
+      ],
+      "gaps": [
+        "The reference profile now renders scheduled signed backups against a platform-provided point-in-time clone, an independent verification job that runs under a different identity and holds only the public trust root, retention with legal hold, a declared immutable off-account target with a named WORM mechanism, and a restore rehearsal that restores to a fresh path and cannot overwrite or activate a live store. The engine holds an exclusive lock on its store, so no job can read a live tenant volume; the profile refuses to render one that tries.",
+        "APPROVED RECOVERY OBJECTIVES (2026-08-01): RPO 24 hours, RTO 4 hours. They describe the mechanism actually deployed - daily signed backups against a platform point-in-time clone, backupIntervalSeconds 86400 with a maxAgeSeconds 129600 staleness alert - because approving targets tighter than the deployed schedule would make the drill fail by construction rather than measure anything. They are pre-production targets, revisitable per deployment. Every drill records MEASURED recovery point and recovery time as first-class results rather than a pass/fail against the targets, so evidence that the real numbers are better is available to justify tightening them when a contract requires it.",
+        "Recovery has been exercised end to end on the local-filesystem topology only, on developer hardware, at developer scale: clone, signed backup under sustained writes, independent verification through trust-root custody, restore to a new path, attested reopen, known-answer reads, provenance and taint checks, and fault injection. Receipts are retained under docs/drills/. Customer-scale data volumes, the target storage stacks (CSI drivers, backup products, object-lock targets), and SRE sign-off are external and unexercised, so EXT-DR remains open. No drill in this repository was run against production-shaped storage."
+      ]
+    },
+    {
+      "id": "OBS-01",
+      "title": "Operational observability and bounded admission",
+      "status": "partial",
+      "frameworks": [
+        "csa-ccm-caiq-4.1",
+        "csa-ai-caiq-1.0.2"
+      ],
+      "evidence": [
+        "docs/operations.md",
+        "docs/backup-restore.md",
+        ".github/workflows/ci.yml",
+        "crates/loomctl/src/metrics.rs",
+        "crates/loomctl/tests/backup_operations.rs",
+        "deploy/reference/kubernetes/50-backup-alerts.yaml",
+        "scripts/backup_operations.py"
+      ],
+      "gaps": [
+        "Backup, verification, retention, and scrub signals are emitted as fixed-cardinality unlabelled series and are wired to rendered alerts for a stale backup, an unverified backup, a failing job, and detected damage; the stale rule fires on absence so a job that never ran is not read as health. No signal carries a tenant identifier. What remains deployment-owned is the collection pipeline itself: no metric here has been scraped by a production collector, no alert has been routed to a named on-call rota, and no threshold has been tuned against observed behaviour."
+      ]
+    },
+    {
+      "id": "IR-01",
+      "title": "Incident and vulnerability response",
+      "status": "partial",
+      "frameworks": [
+        "nist-ssdf-1.1",
+        "csa-ccm-caiq-4.1"
+      ],
+      "evidence": [
+        "SECURITY.md",
+        "docs/incident-response.md",
+        "crates/loom-drill/src/incident.rs",
+        "docs/drills/README.md"
+      ],
+      "gaps": [
+        "Incident notification CONTENT is generated from a recovery drill's measured receipt - what was lost, what bounds it, how long recovery took, which backup was consumed, which trust root verified it - for both an operations and a customer audience, and is exercised as a scripted tabletop in crates/loom-drill. Every generated notification records delivered=false and carries what delivery would require.",
+        "Named on-call staff, a paging system wired to a rota, an accountable customer-communications channel, a documented notifiability decision, and an exercised real notification drill are organizational gates. Nothing in this repository has been delivered to anyone; EXT-OPERATIONS remains open."
+      ]
+    },
+    {
+      "id": "VM-01",
+      "title": "Dependency and vulnerability management",
+      "status": "implemented",
+      "frameworks": [
+        "nist-ssdf-1.1",
+        "csa-ccm-caiq-4.1"
+      ],
+      "evidence": [
+        "SECURITY.md",
+        ".github/dependabot.yml",
+        ".github/workflows/security.yml",
+        ".github/workflows/release-bundle.yml"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "AIRISK-01",
+      "title": "AI provenance, taint containment, and action governance",
+      "status": "implemented",
+      "frameworks": [
+        "nist-ai-rmf-1.0",
+        "csa-ai-caiq-1.0.2"
+      ],
+      "evidence": [
+        "docs/threat-model.md",
+        "docs/invariants.md",
+        "docs/at-map.md"
+      ],
+      "gaps": []
+    }
+  ],
+  "externalGates": [
+    {
+      "id": "EXT-PENTEST",
+      "title": "Independent penetration test",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "Product Security",
+      "acceptanceCriteria": "Signed final report; all critical/high findings remediated or risk-accepted by the CISO.",
+      "evidence": []
+    },
+    {
+      "id": "EXT-DR",
+      "title": "Production-topology recovery exercise",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "SRE",
+      "acceptanceCriteria": "Signed drill receipt proves approved RPO/RTO on customer-scale data using the target storage and backup stack.",
+      "evidence": []
+    },
+    {
+      "id": "EXT-HSM",
+      "title": "HSM/KMS trust-root ceremony and rotation",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "Enterprise PKI",
+      "acceptanceCriteria": "Dual-control key ceremony, non-exportable production keys, revocation path, and completed rotation drill.",
+      "evidence": []
+    },
+    {
+      "id": "EXT-OPERATIONS",
+      "title": "Support, incident, SLA, and escalation readiness",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "Support and SRE",
+      "acceptanceCriteria": "Named 24x7 escalation rota, contracted support targets, status communications, and exercised incident notification procedure.",
+      "evidence": []
+    },
+    {
+      "id": "EXT-COMPLIANCE",
+      "title": "Organizational assurance and contractual package",
+      "status": "open",
+      "blocking": true,
+      "ownerRole": "GRC and Legal",
+      "acceptanceCriteria": "Buyer-required SIG/CAIQ, DPA, subprocessor/residency disclosure, and applicable SOC 2 or ISO 27001 evidence approved.",
+      "evidence": []
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[package]
+name = "loomctl"
+description = "Read-only-by-default operator diagnostics and verified backup tooling for LoomDB."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Operator diagnostics and local backup/restore never call sleep/wake. Keep the object-storage client
+# amputated from loomctl in every profile, including its ordinary default build.
+loom-branch = { path = "../loom-branch", default-features = false }
+loom-core.workspace = true
+# Trust-root custody: the operator surface for the rotation sequence, and the directory the
+# verification commands check against.
+loom-keys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ed25519-dalek.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,5 @@
+# D-1: Rust, stable toolchain. No nightly features, ever — the engine is a long-lived server
+# holding irreplaceable state, and a nightly dependency is a scheduled outage.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

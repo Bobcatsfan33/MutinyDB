@@ -1,4 +1,4 @@
-# Current's D-1, adopted for the consolidation repository: Rust, stable toolchain, no nightly
+# Schweep's D-1, adopted for the consolidation repository: Rust, stable toolchain, no nightly
 # features ever. MutinyDB is a long-lived server holding irreplaceable state across four planes,
 # and a nightly dependency is a scheduled outage.
 [toolchain]

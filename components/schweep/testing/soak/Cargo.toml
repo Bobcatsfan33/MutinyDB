@@ -1,0 +1,26 @@
+[package]
+name = "schweep-soak"
+description = "The soak harness: RSS sampled across a run, at a fixed memory ceiling."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+schweep-zset.workspace = true
+schweep-plan.workspace = true
+schweep-state.workspace = true
+schweep-circuit.workspace = true
+schweep-sql.workspace = true
+schweep-memo.workspace = true
+schweep-differential.workspace = true
+# The C9 memo-ceiling gate streams a catch-up out of a real log and checks it against the oracle.
+schweep-log.workspace = true
+schweep-oracle.workspace = true
+# The C9 soak drives a real schweepd over a socket for a full window.
+schweep-server.workspace = true
+
+[lints]
+workspace = true
