@@ -28,6 +28,9 @@ durable queue; the sealed epoch is the offset.
 
 - The capture page is reserved and cannot already be present in the caller's transaction.
 - Commit sequences must start at one and be dense relative to the parent manifest's capture.
+- Sequence one is accepted only on an empty substrate root. A non-empty store with no capture page
+  requires an explicit, separately gated bootstrap migration; pre-Mutiny data is never silently
+  omitted from the compute plane.
 - Tenant, plane, branch, and table identifiers are non-empty and cannot contain path separators or
   control bytes.
 - A structurally incomplete envelope, branch mismatch, refused authority decision, forged manifest

@@ -299,6 +299,35 @@ fn a_row_the_compute_catalog_cannot_accept_never_commits_to_storage() {
 }
 
 #[test]
+fn a_nonempty_legacy_store_requires_an_explicit_bootstrap_migration() {
+    let storage_dir = tempfile::tempdir().unwrap();
+    let store = DurableStore::open(std_vfs(), storage_dir.path(), StoreConfig::default()).unwrap();
+    store.recover().unwrap();
+    let mut legacy = store.begin().unwrap();
+    store.write(&mut legacy, 12, b"legacy".to_vec()).unwrap();
+    let legacy_head = store.commit(legacy).unwrap();
+
+    let (fixture, authority) = capture(1);
+    let draft = CommitDraft {
+        tenant: fixture.tenant,
+        plane: fixture.plane,
+        commit_seq: fixture.commit_seq,
+        branch: fixture.branch,
+        envelope: fixture.envelope,
+        tables: fixture.tables,
+    };
+    let mut transaction = store.begin().unwrap();
+    store
+        .write(&mut transaction, 7, b"first-captured-write".to_vec())
+        .unwrap();
+    assert!(matches!(
+        commit_with_capture(&store, transaction, &draft, &schemas(), &authority),
+        Err(BridgeError::UncapturedParent { .. })
+    ));
+    assert_eq!(store.head(), legacy_head);
+}
+
+#[test]
 fn crash_after_storage_commit_recovers_capture_from_the_same_manifest() {
     let storage_dir = tempfile::tempdir().unwrap();
     let compute_dir = tempfile::tempdir().unwrap();

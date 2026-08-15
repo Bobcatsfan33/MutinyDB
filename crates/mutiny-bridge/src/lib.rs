@@ -180,6 +180,10 @@ pub enum BridgeError {
     CaptureDecode { commit: String, reason: String },
     #[error("substrate refused the captured commit: {reason}")]
     Storage { reason: String },
+    #[error(
+        "cannot start MutinyDB capture at non-empty parent {commit} ({page_count} pages); run an explicit bootstrap migration"
+    )]
+    UncapturedParent { commit: String, page_count: u64 },
     #[error(transparent)]
     Log(#[from] schweep_log::LogError),
 }
@@ -628,7 +632,23 @@ fn validate_parent_sequence(
             }
             Ok(())
         }
-        Err(WalError::Pager(PagerError::PageNotFound { .. })) if found == 1 => Ok(()),
+        Err(WalError::Pager(PagerError::PageNotFound { .. })) if found == 1 => {
+            let manifest =
+                store
+                    .pager()
+                    .manifest(&parent)
+                    .map_err(|error| BridgeError::Storage {
+                        reason: error.to_string(),
+                    })?;
+            if manifest.page_count == 0 {
+                Ok(())
+            } else {
+                Err(BridgeError::UncapturedParent {
+                    commit: parent.to_hex(),
+                    page_count: manifest.page_count,
+                })
+            }
+        }
         Err(WalError::Pager(PagerError::PageNotFound { .. })) => {
             Err(BridgeError::SequenceGap { expected: 1, found })
         }
