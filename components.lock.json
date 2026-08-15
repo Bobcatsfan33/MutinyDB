@@ -37,15 +37,16 @@
       "name": "prismdb",
       "repository": "https://github.com/Bobcatsfan33/PrismDB",
       "path": "components/prismdb",
-      "commit": "296e804171a96c3e937599d3ef4d35e3ae6f5667",
-      "sourceTree": "9509ad8dbd401ec892aac01a9875fccfd3186b6c",
-      "tree": "9509ad8dbd401ec892aac01a9875fccfd3186b6c",
+      "commit": "84e5a4f99a7232b0c5144b5f83a6aaf4d9940753",
+      "sourceTree": "43c59a794adf85e703de7bb57789e5411902f550",
+      "tree": "43c59a794adf85e703de7bb57789e5411902f550",
       "releaseTag": null,
       "phase": "semantic",
       "admitted": false,
       "blockers": [
         "PrismDB has no release tag.",
-        "The semantic operators and storage tier have not passed the composed exact-oracle gate."
+        "A live AWS KMS rotation/rollback receipt has not been produced in an authorized AWS account.",
+        "Release admission remains blocked until the composed product and release gates pass."
       ]
     },
     {
