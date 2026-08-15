@@ -1,0 +1,2 @@
+# Paired reference engine for the TPC-H SF0.1 comparison.
+duckdb==1.5.5

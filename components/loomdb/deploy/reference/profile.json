@@ -1,0 +1,219 @@
+{
+  "schemaVersion": 1,
+  "profile": "loomdb-reference-host",
+  "description": "Supported reference production host profile for loomDB. Declarative source of truth; scripts/render_host_profile.py renders the committed Kubernetes and systemd artifacts from it.",
+  "namespace": "loomdb-reference",
+  "image": {
+    "repository": "ghcr.io/bobcatsfan33/loomd",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "digestIsPlaceholder": true,
+    "build": "--no-default-features --features airgap",
+    "bundle": {
+      "kind": "software",
+      "id": "loomd-air-gap",
+      "version": "v0.4.0",
+      "publicKeyPath": "/etc/loomd/trust/loom-release.pub",
+      "payloadPath": "/usr/local/bin/loomd",
+      "bundlePath": "/etc/loomd/trust/loomd.bundle"
+    }
+  },
+  "frontDoor": {
+    "kind": "mtls-terminating-proxy",
+    "implementation": "envoy",
+    "image": {
+      "repository": "docker.io/envoyproxy/envoy",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "digestIsPlaceholder": true
+    },
+    "identity": "spiffe://example.org/ns/loomdb-reference/sa/loomd",
+    "trustDomain": "example.org",
+    "listenPort": 8443,
+    "requireClientCertificate": true,
+    "minimumTlsVersion": "TLSv1_3",
+    "healthPort": 9902,
+    "adminBindAddress": "127.0.0.1",
+    "bridgeBindAddress": "127.0.0.1",
+    "bridgePort": 9090,
+    "authorizedClientIdentities": [
+      "spiffe://example.org/ns/agent-runtime/sa/agent-gateway"
+    ]
+  },
+  "hardening": {
+    "runAsUser": 65532,
+    "runAsGroup": 65532,
+    "runAsNonRoot": true,
+    "readOnlyRootFilesystem": true,
+    "allowPrivilegeEscalation": false,
+    "dropCapabilities": ["ALL"],
+    "seccompProfile": "RuntimeDefault",
+    "apparmorProfile": "runtime/default",
+    "seLinuxType": "container_t",
+    "automountServiceAccountToken": false,
+    "serviceAccountTokenJustification": null
+  },
+  "limits": {
+    "cpu": "2",
+    "memory": "4Gi",
+    "ephemeralStorage": "1Gi",
+    "openFiles": 4096,
+    "processes": 256,
+    "maxRequestBytes": 1048576,
+    "requestsPerSecond": 100,
+    "requestBurst": 200
+  },
+  "writeAuthentication": {
+    "description": "loomd opens its store with Loom::open_production_attested, so every write arriving over MCP is verified against the governance-signed actor registry rather than merely attributed to the actor it names. There is no field in this profile that turns that off: a tenant declares its registry and its rollback floor, or it cannot be rendered. governanceKeyPath names a trust-root REGISTER, not a bare public key: a bare key can be verified against but cannot be revoked, and revocation is the one thing custody must be able to do (P8, docs/key-custody.md).",
+    "governanceKeyPath": "/etc/loomd/trust/actor-governance-trust-roots.json"
+  },
+  "externalMounts": {
+    "policy": {
+      "description": "Reviewed PolicySet, owned and rotated outside this repository.",
+      "source": "secret",
+      "secretName": "loomd-policy",
+      "mountPath": "/etc/loomd/policy",
+      "readOnly": true,
+      "mode": "0440"
+    },
+    "actorRegistry": {
+      "description": "Governance-signed actor registry and its rollback floor.",
+      "source": "secret",
+      "secretName": "loomd-actor-registry",
+      "mountPath": "/etc/loomd/actors",
+      "readOnly": true,
+      "mode": "0440"
+    },
+    "trustRoot": {
+      "description": "Release trust root: the independently distributed loomDB public key and the signed bundle.",
+      "source": "secret",
+      "secretName": "loomd-trust-root",
+      "mountPath": "/etc/loomd/trust",
+      "readOnly": true,
+      "mode": "0440"
+    },
+    "frontDoorIdentity": {
+      "description": "Workload certificate, key, and client CA for the mTLS front door.",
+      "source": "secret",
+      "secretName": "loomd-frontdoor-identity",
+      "mountPath": "/etc/loomd/identity",
+      "readOnly": true,
+      "mode": "0440"
+    },
+    "backupSigningKey": {
+      "description": "The backup trust-root private key. Mounted into the backup writer alone; the engine, the independent verifier, and the rehearsal never see it.",
+      "source": "secret",
+      "secretName": "loomd-backup-signing",
+      "mountPath": "/etc/loomd/backup-signing",
+      "readOnly": true,
+      "mode": "0400"
+    },
+    "backupTrustRoot": {
+      "description": "The backup trust-root public key, provisioned independently of the writer. Mounted into the verifier and the rehearsal alone.",
+      "source": "secret",
+      "secretName": "loomd-backup-trust-root",
+      "mountPath": "/etc/loomd/backup-trust",
+      "readOnly": true,
+      "mode": "0440"
+    },
+    "retentionHolds": {
+      "description": "The legal-hold register. Mounted into retention alone; nothing that can write a backup can lift a hold.",
+      "source": "secret",
+      "secretName": "loomd-legal-hold",
+      "mountPath": "/etc/loomd/retention",
+      "readOnly": true,
+      "mode": "0440"
+    }
+  },
+  "backupOperations": {
+    "description": "Scheduling, retention, verification, and rehearsal around the signed-backup mechanism. loomDB signs and verifies; the platform supplies the point-in-time source and the immutable off-account target.",
+    "keyId": "backup-root-2026-q3",
+    "signingKeyPath": "/etc/loomd/backup-signing/backup-root.hex",
+    "trustRootPath": "/etc/loomd/backup-trust/backup-root.pub.hex",
+    "stagingPath": "/var/backups/loomd",
+    "metricsPath": "/var/lib/loomd-metrics",
+    "schedules": {
+      "backup": "17 2 * * *",
+      "verify": "47 3 * * *",
+      "prune": "11 5 * * *",
+      "rehearsal": "23 4 * * 0"
+    },
+    "backupIntervalSeconds": 86400,
+    "maxAgeSeconds": 129600,
+    "pointInTimeSource": {
+      "kind": "csi-volume-snapshot-clone",
+      "claimTemplate": "loomd-snapshot-{tenant}",
+      "description": "loomd holds an exclusive advisory lock on its store for the process lifetime, so a backup job cannot read a volume a live engine is serving. The platform takes a CSI VolumeSnapshot of the tenant volume and binds it as this claim; the backup job mounts that clone and never the live volume."
+    },
+    "retention": {
+      "keepDays": 35,
+      "minimumCopies": 7,
+      "legalHoldFile": "/etc/loomd/retention/legal-hold.json",
+      "immutableTarget": {
+        "kind": "object-lock-compliance",
+        "retainDays": 90,
+        "offAccount": true,
+        "description": "Host responsibility. loomDB links no object-storage client in any build, so it can neither write to nor delete from this target; the platform replicates the staging root into a compliance-locked bucket in an account the loomDB deployment has no credentials for."
+      }
+    },
+    "rehearsal": {
+      "restorePath": "/var/lib/loomd-rehearsal",
+      "description": "Restores the newest verified backup to a fresh path and runs an integrity scrub. It never writes to a tenant data directory and never promotes what it restored; activating a restored store is a deliberate operator act."
+    },
+    "signals": [
+      "loomdb_backup_last_success_timestamp_seconds",
+      "loomdb_backup_last_verified_timestamp_seconds",
+      "loomdb_backup_last_verified_recovery_point_seconds",
+      "loomdb_backup_duration_seconds",
+      "loomdb_backup_bytes",
+      "loomdb_backup_files",
+      "loomdb_backup_failures_total",
+      "loomdb_backup_scrub_damaged_objects",
+      "loomdb_backup_retained_copies",
+      "loomdb_backup_pruned_total",
+      "loomdb_backup_legal_hold_retained"
+    ]
+  },
+  "observability": {
+    "enabled": false,
+    "disabledReason": "The reference image is built --no-default-features --features airgap, which compiles the OTLP exporter out entirely. Telemetry is not 'configured off' here; there is no exporter in the binary to enable. To collect metrics, build --no-default-features --features airgap,observability (telemetry with still no object-storage client), set image.build to match, set enabled to true, and add the collector to egressAllowed.",
+    "otlpEndpoint": "https://otel-collector.observability.svc:4317",
+    "instruments": [
+      "loomd.rpc.requests",
+      "loomd.rpc.failures",
+      "loomd.rpc.denied",
+      "loomd.rpc.duration"
+    ],
+    "forbiddenDimensions": [
+      "tenant",
+      "tenant_id",
+      "request_id",
+      "arguments",
+      "token",
+      "key",
+      "source_text",
+      "response_body"
+    ]
+  },
+  "egressAllowed": [],
+  "tenants": [
+    {
+      "name": "alpha",
+      "tenantId": "alpha-corp",
+      "dataDir": "/var/lib/loomd/alpha",
+      "volumeClaim": "loomd-data-alpha",
+      "storage": "50Gi",
+      "policyFile": "/etc/loomd/policy/alpha.json",
+      "actorRegistryFile": "/etc/loomd/actors/alpha.json",
+      "actorRegistryMinGeneration": 1
+    },
+    {
+      "name": "beta",
+      "tenantId": "beta-industries",
+      "dataDir": "/var/lib/loomd/beta",
+      "volumeClaim": "loomd-data-beta",
+      "storage": "50Gi",
+      "policyFile": "/etc/loomd/policy/beta.json",
+      "actorRegistryFile": "/etc/loomd/actors/beta.json",
+      "actorRegistryMinGeneration": 1
+    }
+  ]
+}

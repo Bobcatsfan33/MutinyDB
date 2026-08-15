@@ -1,0 +1,40 @@
+{
+  "$comment": [
+    "C9 · what schweepd's two bounds cost in bytes (I-10).",
+    "Regenerate: cargo run --release -p schweep-server --bin c9-costs > testing/evidence/c9-bounds.json",
+    "DETERMINISTIC: a framed record's length and a rendered delta's length are pure functions",
+    "of their inputs, so testing/differential/tests/evidence.rs recomputes these and compares",
+    "them. If this file drifts from the code, that test fails rather than the ledger quietly",
+    "describing something else."
+  ],
+  "queued_batch_bytes": [
+    { "rows": 1, "padding": 0, "frame_bytes": 85 },
+    { "rows": 10, "padding": 0, "frame_bytes": 391 },
+    { "rows": 100, "padding": 0, "frame_bytes": 3451 },
+    { "rows": 1000, "padding": 0, "frame_bytes": 34051 },
+    { "rows": 1, "padding": 480, "frame_bytes": 565 },
+    { "rows": 10, "padding": 480, "frame_bytes": 5191 },
+    { "rows": 100, "padding": 480, "frame_bytes": 51451 },
+    { "rows": 1000, "padding": 480, "frame_bytes": 514051 }
+  ],
+  "retained_delta_bytes": [
+    { "rows_changed": 1, "rendered_bytes": 28 },
+    { "rows_changed": 10, "rendered_bytes": 280 },
+    { "rows_changed": 100, "rendered_bytes": 2980 },
+    { "rows_changed": 1000, "rendered_bytes": 31780 }
+  ],
+  "at_the_compiled_settings": {
+    "source_queue_bound": 64,
+    "source_queue_bytes": 8388608,
+    "widest_measured_batch_bytes": 514051,
+    "bytes_one_source_would_hold_at_the_count_bound_alone": 32899264,
+    "widest_batches_admitted_by_the_byte_bound": 16,
+    "narrow_100_row_batch_bytes": 3451,
+    "bytes_one_source_holds_at_the_count_bound_for_narrow_batches": 220864,
+    "subscription_ring": 256,
+    "subscription_ring_bytes": 8388608,
+    "widest_measured_delta_bytes": 31780,
+    "bytes_one_query_retains_at_the_count_bound": 8135680,
+    "widest_deltas_admitted_by_the_byte_bound": 263
+  }
+}

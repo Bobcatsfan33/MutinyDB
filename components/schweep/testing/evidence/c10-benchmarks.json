@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "suite": "schweep-c10",
+  "generated_at_utc": "2026-08-15T02:43:36Z",
+  "machine": {
+    "platform": "macOS-15.7.4-arm64-arm-64bit-Mach-O",
+    "python": "3.14.6",
+    "duckdb": "1.5.5",
+    "profile": "release"
+  },
+  "method": {
+    "rounds": 11,
+    "comparison": "paired alternating rounds after one untimed warm-up",
+    "reporting": "median, full sample, fastest, and slowest; headlines use slowest"
+  },
+  "native": {
+    "schema_version": 1,
+    "suite": "schweep-c10-native",
+    "benchmarks": [
+      {
+        "name": "maintenance change volume 100",
+        "machine": "macos aarch64 \u00b7 8 logical cpus",
+        "profile": "release",
+        "rounds": 11,
+        "median_nanos": 89125,
+        "fastest_nanos": 75416,
+        "slowest_nanos": 124667,
+        "spread": 1.653,
+        "work_unit": "changed row",
+        "work_per_round": 100,
+        "slowest_nanos_per_work": 1246.67,
+        "notes": [
+          "alternating insert/retract keeps retained state bounded"
+        ]
+      },
+      {
+        "name": "maintenance change volume 1000",
+        "machine": "macos aarch64 \u00b7 8 logical cpus",
+        "profile": "release",
+        "rounds": 11,
+        "median_nanos": 800458,
+        "fastest_nanos": 589917,
+        "slowest_nanos": 1476458,
+        "spread": 2.503,
+        "work_unit": "changed row",
+        "work_per_round": 1000,
+        "slowest_nanos_per_work": 1476.46,
+        "notes": [
+          "alternating insert/retract keeps retained state bounded"
+        ]
+      },
+      {
+        "name": "maintenance change volume 10000",
+        "machine": "macos aarch64 \u00b7 8 logical cpus",
+        "profile": "release",
+        "rounds": 11,
+        "median_nanos": 8849541,
+        "fastest_nanos": 6626625,
+        "slowest_nanos": 31758958,
+        "spread": 4.793,
+        "work_unit": "changed row",
+        "work_per_round": 10000,
+        "slowest_nanos_per_work": 3175.9,
+        "notes": [
+          "alternating insert/retract keeps retained state bounded"
+        ]
+      },
+      {
+        "name": "standing answer read latency",
+        "machine": "macos aarch64 \u00b7 8 logical cpus",
+        "profile": "release",
+        "rounds": 11,
+        "median_nanos": 17167583,
+        "fastest_nanos": 16615167,
+        "slowest_nanos": 18067875,
+        "spread": 1.087,
+        "work_unit": "read",
+        "work_per_round": 1000,
+        "slowest_nanos_per_work": 18067.88,
+        "notes": [
+          "100,000-row retained input; 128-row aggregate answer; 1,000 reads per round"
+        ]
+      },
+      {
+        "name": "10,000-query swarm marginal registration",
+        "machine": "macos aarch64 \u00b7 8 logical cpus",
+        "profile": "release",
+        "rounds": 11,
+        "median_nanos": 903916,
+        "fastest_nanos": 789292,
+        "slowest_nanos": 1785458,
+        "spread": 2.262,
+        "work_unit": "marginal query",
+        "work_per_round": 1,
+        "slowest_nanos_per_work": 1785458.0,
+        "notes": [
+          "10,000 distinct queries share one scan/filter prefix"
+        ]
+      }
+    ]
+  },
+  "tpch_sf0_1": {
+    "scale_factor": 0.1,
+    "source": "DuckDB tpch extension dbgen",
+    "lineitem_rows": 600572,
+    "query_scope": "supported-dialect projection over TPC-H lineitem: group by l_shipmode and sum integer l_linenumber; this is not the official TPC-H query suite",
+    "schweep_oneshot": {
+      "rounds": 11,
+      "median_nanos": 463183708,
+      "fastest_nanos": 451211250,
+      "slowest_nanos": 477258000,
+      "all_nanos": [
+        472974958,
+        461142750,
+        472064917,
+        477258000,
+        463630208,
+        463183708,
+        468702208,
+        451211250,
+        453531791,
+        454809000,
+        452488125
+      ]
+    },
+    "duckdb": {
+      "rounds": 11,
+      "median_nanos": 4182000,
+      "fastest_nanos": 3561500,
+      "slowest_nanos": 5334916,
+      "all_nanos": [
+        5334916,
+        4182000,
+        3736042,
+        4232625,
+        4247667,
+        3655584,
+        4501750,
+        3561500,
+        3996084,
+        4003000,
+        4345625
+      ]
+    },
+    "slowest_ratio_schweep_over_duckdb": 89.45932794443249
+  }
+}

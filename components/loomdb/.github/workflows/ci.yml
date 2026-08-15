@@ -1,0 +1,335 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Nightly, 06:00 UTC — the full-window soaks (docs/04 L5). The fast default of both soaks runs in
+    # the ordinary `test` job on every push; this runs the long, release, flat-memory-measured window.
+    - cron: "0 6 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  enterprise-readiness:
+    name: enterprise evidence and decision integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - run: python3 scripts/verify_enterprise_readiness.py
+      - name: open blocking gates cannot be represented as approved
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          source = Path("docs/enterprise-readiness.json")
+          document = json.loads(source.read_text())
+          document["assessment"]["deploymentDecision"] = "approved"
+          Path("/tmp/loomdb-false-approval.json").write_text(json.dumps(document))
+          PY
+          if python3 scripts/verify_enterprise_readiness.py /tmp/loomdb-false-approval.json; then
+            echo "::error::readiness gate accepted a false production approval"
+            exit 1
+          fi
+
+  host-profile:
+    name: reference host profile upholds its controls
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      # Validates deploy/reference/profile.json, proves the committed Kubernetes and systemd
+      # artifacts still match it byte for byte, checks the controls that live in the rendered text,
+      # and applies every unsafe posture to require it is rejected.
+      - run: python3 scripts/verify_host_profile.py
+      - name: the profile gate cannot be satisfied by an unsafe posture
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from render_host_profile import ProfileError, validate
+
+          # The control this repository cares about most: two tenants must never share one store.
+          # If the gate ever accepts this, the one-tenant-per-process guarantee is decoration.
+          document = json.loads(pathlib.Path("deploy/reference/profile.json").read_text())
+          document["tenants"][1]["dataDir"] = document["tenants"][0]["dataDir"]
+          try:
+              validate(document)
+          except ProfileError as error:
+              print(f"correctly rejected: {error}")
+          else:
+              print("::error::host profile gate accepted two tenants sharing one data directory")
+              raise SystemExit(1)
+          PY
+
+  msrv:
+    name: declared MSRV builds the locked workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.89.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: msrv-1.89.0
+      - run: cargo check --locked --workspace --all-targets
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt }
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy -D warnings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # --lib --bins --tests, NOT --all-targets. `--all-targets` implies `--benches`, and a
+      # `harness = false` bench is a plain `main()` — so `cargo test --all-targets` *runs* every
+      # benchmark to completion. `ann_amplification` builds an 8000-record HNSW graph (145 s in
+      # release, far worse in debug), which hung this job for ~50 min. The benches are still
+      # compile-checked by the `clippy -D warnings` job (which does use --all-targets); they must
+      # not be executed by the test job. Run them deliberately with `cargo bench`.
+      - run: cargo test --workspace --lib --bins --tests
+      - run: cargo test --workspace --doc
+
+  # THE ACCEPTANCE TEST. The Q3 demo (docs/04 §3.1), all ten steps, driven through the MCP surface by
+  # a scripted agent — no LLM. --nocapture so the narrative is visible in the log: a buyer can read the
+  # story, including step 8 (the injection refused) and step 10 (taint naming the account it cannot
+  # un-suspend, first). If this goes red, loomdb-v0.1 is not shippable.
+  demo:
+    name: the Q3 demo (verbatim)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p loom-mcp --test demo -- --nocapture
+
+  # The example a stranger runs first. It is the README's quickstart, so it has to keep working, and
+  # it has to keep telling the truth: it checks both moments itself and exits non-zero if either
+  # breaks (proven by mutation — flipping the influence rule to Allow makes it exit 1). Grepping the
+  # output too, so a refactor that keeps the exit code but loses the narrative is still caught.
+  example:
+    name: the taint_recall example (README quickstart)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # pipefail is load-bearing: the default shell here is `bash -e`, which reports a pipeline's
+      # LAST exit code. Without it, `cargo run | tee` would return tee's 0 and a broken example
+      # would pass this job green — the same fail-open shape as a `printf | grep` guard.
+      - name: run the example — its own exit code is the gate
+        run: |
+          set -o pipefail
+          cargo run -p loom-mcp --example taint_recall | tee /tmp/example.out
+      - name: the two moments are actually in the output
+        run: |
+          grep -q "REFUSED" /tmp/example.out
+          grep -q "HELPDESK-user-42" /tmp/example.out
+          grep -q "identity.reinstate_account" /tmp/example.out
+          grep -q "Both moments held" /tmp/example.out
+
+  # The four model oracles. Each is a naive, obviously-correct reference implementation differentially
+  # tested against the real engine under randomized operation sequences. Between them they have found
+  # multiple real bugs (a double-counted counter on re-merge; provenance overwritten by the data commit;
+  # a taint that stopped at merge boundaries). If any goes red, do not ship.
+  oracles:
+    name: model oracles (branch · taint · isolation · policy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p loom-branch --release --test oracle
+        env: { PROPTEST_CASES: "2000" }
+      - run: cargo test -p loom-provenance --release --test oracle
+        env: { TAINT_CASES: "2000" }
+      - run: cargo test -p loom-memory --release --test isolation
+        env: { ISOLATION_CASES: "1000" }
+      - run: cargo test -p loom-policy --release --test oracle
+        env: { POLICY_CASES: "4000" }
+
+  # The HNSW recall oracle at full scale. Like the model oracles and the AT-045 sweep, the heavy version
+  # runs here in RELEASE (RECALL_FULL=1) so the debug `test` job stays fast; the debug job runs a small
+  # graph that catches gross breakage. recall@10 vs the exact brute-force scan, through the tree.
+  recall:
+    name: HNSW recall @ full scale (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release -p loom-memory --test hnsw --test hnsw_store
+        env: { RECALL_FULL: "1" }
+      - run: cargo test --release -p loom-branch --test ann
+        env: { RECALL_FULL: "1" }
+
+  # AT-045 — crash at every byte boundary, under a LoomDB-shaped workload, with one CrashVfs under both
+  # the pager and the ref store. The exhaustive every-byte sweep (AT045_STRIDE=1); the in-suite default
+  # samples ~200 points. This is the LoomDB-granularity crash re-assertion — substrate's 50,000-cycle
+  # suite covers the engine; this covers the second durable object (the ref write, invariant I-8).
+  crash:
+    name: AT-045 crash sweep (every byte)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p loom-branch --release --test crash
+        env: { AT045_STRIDE: "1" }
+
+  # L5 airgap certification (the amputation, structurally verified). The only code in LoomDB that links
+  # an object-storage client is loom-branch's `remote` sleep/wake path; the airgap build compiles it out.
+  # This job proves the amputation the way an auditor would — by inspecting the artifact's dependency
+  # graph, not by trusting a `--network none` runtime flag — so it CANNOT silently regress if someone
+  # re-adds a default-features edge. It also builds loomd and loomctl to prove both gates compile.
+  airgap:
+    name: build flavours and airgap amputation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # P7.1: this job used to inspect only the *pure* air-gap graph. P6 documented a fourth
+      # flavour — air-gap plus telemetry — that a `compile_error!` in loom-mcp made uncompilable,
+      # and nothing here noticed, because nothing here built it. The script now compiles all four
+      # supported flavours, requires every forbidden combination to be rejected *by name*, and
+      # inspects the graph of each: no object-storage client in either air-gap flavour, no exporter
+      # in the pure one, and an exporter that is actually present in the connected one.
+      - name: every build flavour compiles, is rejected, or links what it claims
+        run: bash scripts/verify_build_flavours.sh
+
+  observability:
+    name: optional OTLP telemetry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - run: cargo test -p loom-mcp --features observability
+      - name: exporter is absent when observability is disabled
+        run: |
+          if cargo tree -p loom-mcp -e no-dev | grep -iE 'opentelemetry|opentelemetry-otlp'; then
+            echo "::error::telemetry dependencies leaked into the default loomd graph"
+            exit 1
+          fi
+
+  # L5 no-egress certification: the WHOLE suite passes with no route to the outside world. This proves
+  # nothing in LoomDB needs egress — sleep/wake tests use the in-memory object-store backend, and the
+  # oracles, demo, and soaks are all local. Vendor deps while the network is up, then run offline inside
+  # a `--network none` container. (The `airgap` job proves the shipped binary has no S3 client; this
+  # proves the running suite needs no network. Two different guarantees, both required.)
+  no-egress:
+    name: no-egress (offline suite, --network none)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Vendor dependencies (network available)
+        run: |
+          mkdir -p .cargo
+          cargo vendor vendor > vendor-config.toml
+          cat vendor-config.toml >> .cargo/config.toml
+      - name: Run the suite with no network route at all
+        run: |
+          docker run --rm --network none \
+            -v "$PWD":/w -w /w \
+            -e CARGO_TERM_COLOR=always \
+            -e CARGO_HOME=/w/.cargo-home \
+            rust:1 \
+            cargo test --workspace --offline --lib --bins --tests
+
+  # The full-window soaks (docs/04 L5) — the actual gate on the loomdb-v0.2 tag. NIGHTLY / manual only:
+  # the fast default of both soaks already runs on every push (the `test` job), catching regressions;
+  # this runs the long, RELEASE, flat-memory-measured window on the runner (the headroom host, not a dev
+  # laptop). Both gate on zero errors AND flat memory — a leak fails the job (loom_soak::FlatMemory).
+  soak:
+    name: soaks (full window, nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Soak A — airgap endurance (120-day window, long run)
+        run: cargo test -p loom-soak --release --test airgap_endurance -- --nocapture
+        env: { LOOM_SOAK_ITERS: "50000" }
+      - name: Soak B — multi-tenant concurrency (long run, more workers)
+        run: cargo test -p loom-soak --release --test multitenant_endurance -- --nocapture
+        env: { LOOM_SOAK_ITERS: "8000", LOOM_SOAK_WORKERS: "8" }
+
+  # AT-047 wake latency over REAL object storage — loom's OWN session sleep/wake path (not FlockDB's
+  # DuckDB wake→query). The in-suite AT-047 test proves correctness over an in-memory tier where wake is
+  # microseconds; this measures wake→first-read against a real S3 endpoint and reports p50/p99. MinIO
+  # here is same-runner (low latency), so a pass proves the wake path meets the target over the
+  # object-storage protocol; the WIDE-AREA p99 (a genuinely remote bucket) is the held-for-review
+  # follow-on. Nightly / manual, like the soaks.
+  wake-latency:
+    name: AT-047 wake latency (object storage)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Stand up MinIO and create the bucket
+        run: |
+          set -euo pipefail
+          curl -fsSL https://dl.min.io/server/minio/release/linux-amd64/minio -o minio
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
+          chmod +x minio mc
+          MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
+            ./minio server /tmp/minio-data --address :9000 >/tmp/minio.log 2>&1 &
+          for i in $(seq 1 40); do
+            if curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:9000/minio/health/live && echo "MinIO is live"
+          ./mc alias set local http://localhost:9000 minioadmin minioadmin
+          ./mc mb --ignore-existing local/loomdb
+      - name: Measure loom wake → first read over object storage
+        env:
+          MINIO_URL: http://localhost:9000
+          MINIO_BUCKET: loomdb
+          MINIO_USER: minioadmin
+          MINIO_PASSWORD: minioadmin
+          AWS_REGION: us-east-1
+          LOOM_WAKE_SAMPLES: "50"
+        run: cargo test -p loom-branch --release --test wake_latency -- --ignored --nocapture

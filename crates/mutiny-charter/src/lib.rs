@@ -7,7 +7,8 @@
 //!
 //! # Why the gate is code and not a checklist
 //!
-//! MD-1 through MD-4 are load-bearing for four other repositories. The failure they are written to
+//! MD-1 through MD-4 and MD-6 are load-bearing for the imported component source. The failure they
+//! are written to
 //! prevent — a plane quietly depending sideways, a bridge schema drifting, a dialect growing a
 //! second meaning, a name that has to be surrendered after launch — is a *slow* failure: it does
 //! not announce itself, and by the time it does, the code that assumed the wrong thing is
@@ -25,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 /// The decision records M0 must produce, in order. Adding a record to the charter means adding it
 /// here; a record on disk that is not named here is not part of the gate.
-pub const REQUIRED_RECORDS: &[&str] = &["MD-1", "MD-2", "MD-3", "MD-4"];
+pub const REQUIRED_RECORDS: &[&str] = &["MD-1", "MD-2", "MD-3", "MD-4", "MD-6"];
 
 /// The sections every record carries, in this order. The order is part of the contract: a reader
 /// who opens any record finds the options before the decision, and the consequences after it.

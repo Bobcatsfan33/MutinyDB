@@ -1,0 +1,124 @@
+{
+  "$comment": [
+    "C9 · what one epoch costs a running schweepd in resident memory (I-10).",
+    "Produced by: cargo test --release -p schweep-soak --test c9_server_soak -- --nocapture",
+    "MACHINE-DEPENDENT: resident memory is an allocator and kernel figure, so no test recomputes",
+    "these rows. The deterministic half of C9's measurements is c9-bounds.json, which IS",
+    "recomputed and compared by testing/differential/tests/evidence.rs.",
+    "",
+    "Read the 'attribution' rows first. They are the reason this gate asserts a per-epoch",
+    "coefficient rather than a flat curve: a schweepd's resident memory is O(retained log), because",
+    "schweep_log::Log keeps every sealed batch resident and one dedup token per append. That is not",
+    "a leak and this soak cannot make it flat; docs/PROGRESS.md records it against C10.",
+    "",
+    "The 'unbounded_state_workload' row is here because it was the first measurement and it was",
+    "unusable: with three groups gaining a member per epoch, 6,498 bytes of growth per epoch was",
+    "part legitimate data and part whatever might have been hiding behind it. A soak whose own",
+    "workload grows cannot report a leak."
+  ],
+  "shape": {
+    "sql": "SELECT t.k AS k, SUM(t.n) AS s FROM t GROUP BY t.k",
+    "rows_in_per_epoch": 5,
+    "rows_retracted_per_epoch": 5,
+    "state": "bounded — the table holds five rows forever, so every byte of growth belongs to the log",
+    "load": "one read per epoch, one subscribe every third epoch, one register+deregister every hundredth"
+  },
+  "attribution": [
+    {
+      "workload": "ingest and seal only, no registration",
+      "epochs": 2000,
+      "peak_rss_bytes": 8273920,
+      "rss_bytes_per_epoch": 1589,
+      "what_it_is": "schweep_log::Log's resident sealed batches plus one dedup token per append"
+    },
+    {
+      "workload": "one registration, no reads",
+      "epochs": 2000,
+      "peak_rss_bytes": 11370496,
+      "rss_bytes_per_epoch": 159,
+      "what_it_is": "the registration's own per-epoch cost, which is within the noise of the log's"
+    },
+    {
+      "workload": "one registration, a read every epoch",
+      "epochs": 2000,
+      "peak_rss_bytes": 11780096,
+      "rss_bytes_per_epoch": 177,
+      "what_it_is": "reading is not accumulating"
+    }
+  ],
+  "at_the_committed_shape": {
+    "epochs": 3000,
+    "log_bytes": 1222723,
+    "log_bytes_per_epoch": 407,
+    "state_bytes": 548864,
+    "samples": 3001,
+    "warm_up_samples": 48,
+    "peak_rss_bytes": 13991936,
+    "first_quarter_mean_rss": 9253852,
+    "last_quarter_mean_rss": 13263137,
+    "growth_fraction": 0.433,
+    "rss_bytes_per_epoch": 1810,
+    "rss_bytes_per_epoch_observed_range": [
+      1513,
+      1810
+    ],
+    "per_epoch_budget_bytes": 4096,
+    "epochs_delivered_to_the_subscriber": 3000,
+    "register_deregister_cycles": 30,
+    "verdict": "PASSED: 1,810 bytes per epoch against a 4,096 budget, with the log accounting for 407 of them on disk and more in memory",
+    "note": "The per-epoch figure varies between runs on one machine (1,513 to 1,810 measured); the budget is set from the attribution rows above rather than from any single run. Note also that `Curve::growth` is a FRACTION: 0.433 is 43.3%, and it is reported rather than asserted on, because a server's resident memory grows with its retained log."
+  },
+  "unbounded_state_workload": {
+    "$comment": "The first, unusable measurement. Kept because the lesson is the finding.",
+    "epochs": 3000,
+    "rss_bytes_per_epoch": 6498,
+    "why_it_was_unusable": "three groups gained a member per epoch, so operator state grew without bound and the growth could not be attributed"
+  },
+  "slow_consumer": {
+    "$comment": "The backpressure mutation's instrument. Both numbers were measured on the same workload: 4 sources, 200 attempts each, 600-row batches (~20 KB on the wire), nothing sealed.",
+    "sources": 4,
+    "attempts_per_source": 200,
+    "batch_bytes": 20000,
+    "with_backpressure": {
+      "admitted": 256,
+      "refused": 544,
+      "queued_bytes_per_source": 5235416,
+      "peak_rss_bytes": 18841600,
+      "which_bound_fired": "the count bound (64 batches), at this batch width",
+      "peak_rss_bytes_observed_range": [
+        18841600,
+        19070976
+      ]
+    },
+    "with_backpressure_removed": {
+      "admitted": 800,
+      "refused": 0,
+      "peak_rss_bytes": 45940736
+    },
+    "slow_consumer_budget_bytes": 33554432,
+    "note": "The budget was 160 MiB in the first version and the mutation slipped under it: only the refusal count caught the leak, and the budget — the instrument the sprint asked for — watched it happen. 32 MiB sits between the two measured peaks, so both instruments now fail on it."
+  },
+  "one_binary_per_measurement": {
+    "$comment": "Every RSS-measuring test in this crate is its own test binary, because resident memory is a property of the process. The slow-consumer gate moved to testing/soak/tests/c9_slow_consumer.rs for that reason; the C9 memo-ceiling gate learned it the hard way (see c9-memo-ceiling.json)."
+  },
+  "measured_in_ci_nightly": {
+    "$comment": "The nightly-soak job's first run: ten times the per-push window, on ubuntu-latest, release profile. CI run 31525525249.",
+    "epochs": 10000,
+    "epochs_delivered_to_the_subscriber": 9999,
+    "register_deregister_cycles": 100,
+    "first_quarter_mean_rss": 11716605,
+    "last_quarter_mean_rss": 24043303,
+    "growth_fraction": 1.052,
+    "rss_bytes_per_epoch": 1651,
+    "per_epoch_budget_bytes": 4096,
+    "verdict": "PASSED: 1,651 bytes an epoch at 10,000 epochs against 1,513 to 1,810 at 3,000 — the coefficient is stable across a three-fold longer window, which is what makes it a coefficient rather than an artifact of the window"
+  },
+  "the_slope_check_compared_unequal_spans": {
+    "$comment": "An instrument bug, found by reading a passing run's numbers rather than a failing one.",
+    "what_it_did": "compared mean(Q2) - mean(Q1) against mean(Q4) - mean(Q2): one quarter against two",
+    "consequence": "perfectly linear growth reports a ratio of 2, so a check written as 'no more than twice' only ever fired on a FOURFOLD acceleration while appearing to fire on a doubling",
+    "how_it_surfaced": "the 10,000-epoch nightly reported '4,140,080 then 8,185,777' — a ratio of 1.98, which reads as an accelerating leak and is in fact perfectly linear growth",
+    "fix": "quarter against quarter, over equal spans. Measured after the fix at 3,000 epochs: 1,188,750 then 1,106,778 — the same twice, which is what linear growth should report",
+    "lesson": "a metric that cannot report 1 for the null hypothesis cannot report anything"
+  }
+}

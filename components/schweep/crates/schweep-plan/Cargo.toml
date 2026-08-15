@@ -1,0 +1,16 @@
+[package]
+name = "schweep-plan"
+description = "The logical plan, the binder, and the scalar expression library — shared by the oracle and the engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+schweep-zset.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

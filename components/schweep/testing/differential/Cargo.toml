@@ -1,0 +1,34 @@
+[package]
+name = "schweep-differential"
+description = "The differential harness: seeded scenarios, engine vs oracle, every sealed epoch."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+schweep-zset.workspace = true
+schweep-plan.workspace = true
+schweep-ops.workspace = true
+schweep-circuit.workspace = true
+schweep-sql.workspace = true
+schweep-memo.workspace = true
+schweep-batch.workspace = true
+schweep-log.workspace = true
+schweep-state.workspace = true
+schweep-server.workspace = true
+schweep-oracle.workspace = true
+rand_core.workspace = true
+rand_chacha.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The evidence test checks that the ledger's values match the constants in the code, and one of those
+# constants lives in the soak harness. A dev-dependency cycle — `schweep-soak` depends on this crate —
+# which cargo permits precisely because a test's dependencies are not part of the library's graph.
+schweep-soak.workspace = true
+
+[lints]
+workspace = true

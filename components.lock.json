@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "product": "MutinyDB",
+  "assessedAt": "2026-08-14",
+  "sourceMode": "monorepo-import",
+  "components": [
+    {
+      "name": "substrate",
+      "repository": "https://github.com/Bobcatsfan33/substrate",
+      "path": "components/substrate",
+      "commit": "44480f596ee00a932480fc2c041adb46c7d495ad",
+      "sourceTree": "6e3e1d3d05c13866e974ef95183d581d7eca90f8",
+      "tree": "6e3e1d3d05c13866e974ef95183d581d7eca90f8",
+      "releaseTag": "substrate-v1.6.0",
+      "phase": "storage",
+      "admitted": false,
+      "blockers": [
+        "The composed workspace compatibility gate has not passed yet."
+      ]
+    },
+    {
+      "name": "loomdb",
+      "repository": "https://github.com/Bobcatsfan33/loomdb",
+      "path": "components/loomdb",
+      "commit": "9c2934bc09cc257bec3ffa84c8d7e672eb4f1b33",
+      "sourceTree": "df549518598390b29b9fd61666c1ca3911650277",
+      "tree": "f882131053ef15a68c3bda18970f1898536f1d5f",
+      "releaseTag": "loomdb-v0.5.1",
+      "phase": "trust",
+      "admitted": false,
+      "blockers": [
+        "The trust plane has not been mounted behind MutinyDB's admission boundary.",
+        "The four Loom model oracles have not run against the composed product."
+      ]
+    },
+    {
+      "name": "prismdb",
+      "repository": "https://github.com/Bobcatsfan33/PrismDB",
+      "path": "components/prismdb",
+      "commit": "296e804171a96c3e937599d3ef4d35e3ae6f5667",
+      "sourceTree": "9509ad8dbd401ec892aac01a9875fccfd3186b6c",
+      "tree": "9509ad8dbd401ec892aac01a9875fccfd3186b6c",
+      "releaseTag": null,
+      "phase": "semantic",
+      "admitted": false,
+      "blockers": [
+        "PrismDB has no release tag.",
+        "The semantic operators and storage tier have not passed the composed exact-oracle gate."
+      ]
+    },
+    {
+      "name": "schweep",
+      "repository": "https://github.com/Bobcatsfan33/schweep",
+      "path": "components/schweep",
+      "commit": "c4b6268fff0acba3626313161011e071e515c27e",
+      "sourceTree": "b8905ae1b5b88be05b8609bfc8906eb49a3381a8",
+      "tree": "b8905ae1b5b88be05b8609bfc8906eb49a3381a8",
+      "releaseTag": null,
+      "phase": "compute",
+      "admitted": false,
+      "blockers": [
+        "Schweep C10 is complete; C11 through C13 have not started.",
+        "The required schweep-v0.1 release does not exist."
+      ]
+    }
+  ]
+}

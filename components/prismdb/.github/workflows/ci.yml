@@ -1,0 +1,679 @@
+name: ci
+
+# Reading a run's output when `gh run view --log` comes back empty, and why a branch can have no
+# runs at all: docs/CI-FORENSICS.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  enterprise-readiness:
+    name: enterprise evidence and decision integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - run: python3 scripts/verify_enterprise_readiness.py
+      - name: refuse false production approval
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          source = Path("docs/enterprise-readiness.json")
+          target = Path("/tmp/prismdb-false-approval.json")
+          document = json.loads(source.read_text(encoding="utf-8"))
+          document["assessment"]["deploymentDecision"] = "approved"
+          target.write_text(json.dumps(document), encoding="utf-8")
+          PY
+          if python3 scripts/verify_enterprise_readiness.py /tmp/prismdb-false-approval.json; then
+            echo "readiness verifier accepted false production approval" >&2
+            exit 1
+          fi
+
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  msrv:
+    name: Rust 1.75 MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --workspace --all-targets
+
+  test:
+    name: tests (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Debug catches the debug_assert!s; release is what the numbers are
+      # measured under. A bug that only shows up in one of them is still a bug.
+      - name: test
+        run: |
+          if [ "${{ matrix.profile }}" = "release" ]; then
+            cargo test --workspace --release
+          else
+            cargo test --workspace
+          fi
+
+  faults:
+    name: fault-injection matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Kills a real prism process at every declared durability boundary and
+      # asserts the store opens to the old snapshot or the new one, never both.
+      - run: cargo test --release -p prism-cli --test faults -- --nocapture
+      # S10: the disk filling is a named condition, never a corruption — ENOSPC injected at the
+      # part write, the snapshot commit, and the CURRENT swap degrades old-or-new and recovers;
+      # merge admission defers on a nearly-full disk (merge contract §3).
+      - run: cargo test --release -p prism-cli --test enospc -- --nocapture
+
+  fuzz:
+    name: format fuzzing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Byte flips, every truncation length, total garbage, checksum-repairing
+      # adversaries, and absurd lengths. The reader must decode it or refuse it
+      # with a specific error -- never panic, never allocate on trust.
+      - run: cargo test --release -p prism-part --test fuzz -- --nocapture
+
+  campaign:
+    name: kill/reopen campaign (short)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # A randomized sample on every commit; the full 10,000-run S1 gate runs
+      # nightly (.github/workflows/nightly.yml). Never a hybrid snapshot, ever.
+      - run: PRISM_CAMPAIGN_RUNS=400 cargo test --release -p prism-cli --test campaign -- --ignored --nocapture
+
+  ingestion:
+    name: the S2 gate — replay, offsets, quotas, starvation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Every test in here asserts a clause of docs/INGESTION-CONTRACT.md, which was
+      # written BEFORE the code. Includes the crash that matters most: acked, embedded,
+      # and dead before the part was durable -- the event must come back exactly once,
+      # WITH its semantic columns.
+      - run: cargo test --release -p prism-cli --test ingestion -- --nocapture
+
+  constants:
+    name: no tuned constant without evidence (charter C-1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Checks the ledger and the code against each other IN BOTH DIRECTIONS: a
+      # constant cannot drift from its receipt, and a new one cannot be added without
+      # one. Also re-checks that each tuned constant's own stated rule really does
+      # select it from the data the evidence recorded.
+      - run: cargo test --release -p prism-engine --test tuning -- --nocapture
+
+  sql:
+    name: the S3 gate — same door, tenant policy, bounded parsing, pagination
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Every query runs through BOTH doors, asserting identical rows AND identical
+      # physical-execution counters. Plus 8,000 fuzzed statements that must never panic and
+      # never see another tenant, every parser bound named in its error, and pagination of a
+      # full result set under concurrent ingest+merge.
+      - run: cargo test --release -p prism-cli --test sql -- --nocapture
+      - run: cargo test --release -p prism-sql
+
+  partition:
+    name: the S4 gate — isolation as an I/O property, and the promotion dual door
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Two gates. The first fills every other tenant's partitions with unreadable
+      # garbage and asserts a tenant-A query still answers correctly -- because it never
+      # looked. The second asserts a promoted key and a mapped key are the SAME DOOR:
+      # identical rows and identical logical counters, with physical_bytes_read strictly
+      # LOWER -- because if promotion did not read fewer bytes, it bought nothing.
+      # Plus 10,000 randomized pruning cases (zero false negatives) and the S1 fuzz
+      # discipline applied one layer down, to partition metadata.
+      - run: cargo test --release -p prism-cli --test partition -- --nocapture
+
+  determinism:
+    name: the S6 gate — the answer does not depend on the ISA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Every kernel this runner's CPU supports (scalar + AVX2 on GitHub x86) must answer every
+      # golden query BYTE-IDENTICALLY -- not epsilon-close scores, the same ordered ids and scores
+      # -- over the layout-variant fixtures, plus a boundary-tie stress corpus where a one-ulp
+      # disagreement would flip selection. Also masks the CPU down to scalar and proves the
+      # fallback answers identically. The aarch64 runner below covers NEON.
+      - run: cargo test --release -p prism-cli --test determinism -- --nocapture
+      - run: cargo test --release -p prism-quantizer --lib kernel -- --nocapture
+
+  determinism-arm:
+    name: the S6 gate on ARM (NEON)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The other half of the ISA matrix: scalar vs NEON must be byte-identical. The x86 runner
+      # cannot execute NEON and this one cannot execute AVX2, so between them every shipping kernel
+      # is proven equal to the reference on real silicon.
+      - run: cargo test --release -p prism-cli --test determinism -- --nocapture
+      - run: cargo test --release -p prism-quantizer --lib kernel -- --nocapture
+
+  no-alloc:
+    name: the hot loop allocates nothing (determinism contract §4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # A counting allocator proves the block scan and the bounded top-k perform ZERO heap
+      # allocations across a full golden run, once their buffers are sized. The counter is
+      # THREAD-LOCAL, so parallel test threads (and the harness's own allocations) do not pollute
+      # it -- it counts only allocations on the armed thread, which is where the code under test
+      # runs.
+      - run: cargo test --release -p prism-engine --test alloc -- --nocapture
+      - run: cargo test -p prism-engine --test alloc -- --nocapture
+
+  unsafe-inventory:
+    name: every unsafe block is documented (determinism contract §6)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Grep-level: the count of `unsafe` tokens in crates/*/src must equal the number
+      # docs/UNSAFE-INVENTORY.md accounts for. Adding an unsafe block without documenting its
+      # safety argument turns this red.
+      - run: ./scripts/check-unsafe-inventory.sh
+
+  avx512-compiles:
+    name: the experimental AVX-512 kernel still compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # AVX-512 ships OFF (no CI runner can execute it yet -- determinism contract §3), but it is
+      # written to the same contract and must not rot. Building with the feature type-checks the
+      # intrinsics on x86 without running them.
+      - run: cargo build -p prism-quantizer --features experimental-avx512
+
+  plan:
+    name: the S8 gate — plan-invariance, worst-cell regret, calibration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Every physical strategy (interleaved, scalar-first, semantic-first) answers every golden
+      # query BYTE-IDENTICALLY on golden + layout-variant + boundary-tie corpora; the strategies
+      # genuinely diverge in work; a cursor survives a plan flip between pages; the optimizer is
+      # within the 15% worst-cell regret bound in EVERY cell of the selectivity matrix; and the
+      # estimate-vs-actual selectivity error stays calibrated (the drift harness).
+      - run: cargo test --release -p prism-cli --test plan -- --nocapture
+      - run: cargo test --release -p prism-engine --lib flight -- --nocapture
+      # The three doors -- direct, SQL, Flight -- are byte-identical, and the Flight decode is
+      # bounded (every length capped and named, garbage never panics).
+      - run: cargo test --release -p prism-cli --test sql -- --nocapture
+
+  device:
+    name: the S7 gate — the route is invisible to the answer (GPU-ready, GPU-off)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # S7 ships GPU-ready, GPU-off: no CUDA hardware, no GPU runner, so the GPU gate is NOT
+      # claimed. What IS tested against the CPU reference of the GPU route: selection-identity (the
+      # CPU and gpu-reference routes return byte-identical event ids in byte-identical order,
+      # scores within tolerance) over golden + boundary-tie corpora; a cursor surviving a route
+      # flip between pages; and a device fault at every phase degrading to CPU with the CPU answer.
+      - run: cargo test --release -p prism-cli --test device -- --nocapture
+      - run: cargo test --release -p prism-engine --lib gpu -- --nocapture
+      - run: cargo test --release -p prism-types --lib half -- --nocapture
+      # The device FFI must still compile behind its feature (it is not run -- no device).
+      - run: cargo build -p prism-engine --features cuda
+
+  cluster:
+    name: the S9 gate — semantic_cluster is a function of the data (C-7)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # semantic_cluster: identical clusters/exemplars/aggregates across layouts and forced
+      # plan/route flips (C-7); ARI >= 0.8 on the frozen labeled corpus incl. the adversarial
+      # shapes, with uniform noise asserted LOW-confidence; k over the cap is a named refusal;
+      # exemplars are a C-4 selection on the exact score; partial states merge in canonical order.
+      - run: cargo test --release -p prism-cli --test cluster -- --nocapture
+      # NOVELTY / SEMANTIC_DIFF: injected-novelty precision AND recall >= 0.9 on the WORST seeded
+      # class (the tail), semantic-diff surfaces new behaviour, cross-space novelty is refused.
+      - run: cargo test --release -p prism-cli --test novelty -- --nocapture
+      - run: cargo test --release -p prism-engine --lib cluster -- --nocapture
+      - run: cargo test --release -p prism-quantizer --lib kmeans -- --nocapture
+
+  fp16-contract:
+    name: the fp16 rerank accuracy contract holds (D-049)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      # Re-derive the fp16 receipt and assert: the committed tolerance is at least twice the worst
+      # fp16-vs-fp32 score gap (so no >tolerance pair can invert), and selection is stable. A lossy
+      # encoding that reorders the answer is a different database, not a smaller one.
+      - name: fp16 tolerance covers the gap, and selection is stable
+        run: |
+          ./target/release/prism evidence fp16 --out /tmp/fp16.json >/dev/null
+          python3 - <<'PY2'
+          import json
+          d = json.load(open("/tmp/fp16.json"))
+          print(json.dumps(d, indent=2))
+          assert d["selection_stable"], f"fp16 reordered the answer: {d['unstable_queries']}"
+          assert d["committed_tolerance"] >= 2 * d["max_score_gap"], \
+              f"tolerance {d['committed_tolerance']} < 2x max gap {2*d['max_score_gap']}: a >tolerance pair could invert"
+          print("fp16 contract holds: tolerance covers 2x the gap, selection stable.")
+          PY2
+
+  generations:
+    name: the S5 gate — migration, wrong codebook, bridges, DEGRADED alarms
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Queries answer at EVERY step of a two-generation migration; rollback is catalog-only; a
+      # part filed under the wrong generation is REFUSED rather than decoded (the failure mode is
+      # not a crash -- it is a plausible wrong answer); a cross-space query is refused unless a
+      # bridge is declared, and a bridge fuses RANKS, never scores; seeded drift mid-migration
+      # fires on BOTH generations against their own baselines; and a baseline that cannot be
+      # rebuilt because retention expired its raw bodies goes DEGRADED rather than silent.
+      - run: cargo test --release -p prism-cli --test generations -- --nocapture
+
+  lease:
+    name: the S10 gate — reader leases + GC grace by construction (invariant 6)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # GC grace is derived from the lease TTL (one constant), so a reader within its lease is
+      # never orphaned even at retain=1; a crashed/expired reader's snapshot is reclaimed and its
+      # stale cursor gets the explicit expired-snapshot error (merge contract §5, query contract §2).
+      - run: cargo test --release -p prism-cli --test lease -- --nocapture
+
+  hydration:
+    name: the S14 gate — the disaster drill, and every restore failure named
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The drill itself (D-094): publish, acknowledge a pre-publication tail, destroy the
+      # node-local disk, bring up a replacement as a SEPARATE PROCESS with its own data root,
+      # restore catalog/generations/parts, replay the remote admission log, compare complete
+      # answers and snapshots, and prove the superseded epoch cannot publish. Its recovery-point
+      # and recovery-time numbers are staging-shaped and process-isolated by construction — the
+      # independent-host and customer-scale RPO/RTO claims stay with EXT-DR and P14.
+      - run: cargo test --release -p prism-cli --test hydration -- --nocapture
+
+  encryption-gates:
+    name: encryption gates — nothing legible at rest, rotation without rewrites, rollback intact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # These tests also run inside `tests (debug)` and `tests (release)`. The duplication is the
+      # point: envelope encryption is a claim a reader should be able to check from the checks list
+      # without knowing which workspace job happens to contain it. Everything here is specified in
+      # docs/ENCRYPTION-CONTRACT.md, and each step below names the section it enforces.
+      #
+      # Per-block AEAD, the AAD that stops a block being moved, and the wrapped-DEK envelope the
+      # manifest carries (§3, §4). A part sealed under one tenant's key cannot be opened with
+      # another's, and a sealed block handed to the plaintext read path is refused rather than
+      # decoded into plausible bytes.
+      - run: cargo test --release -p prism-part --test encrypted_part -- --nocapture
+      # Answer-invariance (§the contract's opening fact): a query over an encrypted store and the
+      # same query over the same data unencrypted return byte-identical results. Also carries the
+      # §12 checklist gate below.
+      - run: cargo test --release -p prism-engine --test encrypted_store -- --nocapture
+      # §12, called out by name because it is the one that regresses silently. A fresh DEK is
+      # minted per part, so many parts share one wrapping key id while holding different keys; a
+      # resident-key cache keyed on the wrapping key hands the first part's DEK to every part after
+      # it. It fails closed on the AEAD tag rather than returning wrong rows, but any read spanning
+      # two encrypted parts fails outright — and a single-tenant fixture opens one part and never
+      # sees it. Every encryption gate owes a read across >= 2 encrypted parts.
+      - run: >
+          cargo test --release -p prism-engine --test encrypted_store
+          a_query_spanning_several_encrypted_parts_opens_each_under_its_own_dek
+          -- --exact --nocapture
+      # §5 coverage: the admission log is the one place an admitted event is durable and not yet a
+      # part, locally and in the shared bucket. A sealed record that cannot be opened is a named
+      # refusal, never a skip — silently dropping an acked record is what a WAL exists to prevent.
+      - run: cargo test --release -p prism-engine --test encrypted_wal -- --nocapture
+      # §6: the backup receipt is designed to be read without a key, which makes it the easiest
+      # place to leave the DATA-01 metadata gap open. Its tenant list is sealed and the bucket
+      # ordinal stays plaintext, so the wrong-shard refusal keeps working with no key at all.
+      - run: cargo test --release -p prism-engine --test encrypted_backup -- --nocapture
+      # §9 rotation: expand / activate / rewrap / retire. Rewrapping touches wrapped-DEK envelopes
+      # and NEVER part bytes — the gate compares every column file byte-for-byte across it — and
+      # retire is refused while any live envelope, part or WAL record, still needs the key.
+      - run: cargo test --release -p prism-engine --test rewrap -- --nocapture
+      # §8 fail-closed WITHOUT corruption: decryption sits inside the D-094 staging boundary
+      # (decrypt, verify, then rename), so an unreachable, denied, revoked or absent key service
+      # refuses with nothing installed and CURRENT untouched, and a retry needs no cleanup.
+      - run: cargo test --release -p prism-engine --test encrypted_hydration -- --nocapture
+      # §10: the feature flag rolls back. A never-encrypted store carries no feature bit, no
+      # extension and no new bytes, and the committed compat fixtures are byte-identical to
+      # themselves after being read — a store that rewrites itself on open cannot be rolled back to.
+      - run: cargo test --release -p prism-engine --test encryption_rollback -- --nocapture
+      # The capstone: the full D-094 drill with encryption enabled, through the real `prism` binary
+      # and the CLI's own key service, asserting no event body appears in any object under parts/,
+      # wal/, catalog/ or generations/. Its key custody is the SOFTWARE KEYSTORE (§11) — this proves
+      # the code path, not the custody, and the live-KMS run stays external gate EXT-KMS.
+      - run: cargo test --release -p prism-cli --test encrypted_drill -- --nocapture
+
+  merge-scheduler:
+    name: the S10 gate — size-tiered merges, bounded steady state, answers unchanged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # A merge is compaction: the top-k over the same rows is identical after any number of merge
+      # cycles (C-4/C-5). Size-tiered selection keeps part count and merge debt bounded under
+      # sustained ingest, and every merge decision records its plan (merge contract §2).
+      - run: cargo test --release -p prism-engine --lib scheduler -- --nocapture
+      - run: cargo test --release -p prism-cli --test merge_scheduler -- --nocapture
+      # Deletes are tombstones: logical at once, physical at merge, idempotent (merge contract §6).
+      - run: cargo test --release -p prism-cli --test tombstone -- --nocapture
+      # The accelerated soak: sustained ingest + queries + deletes + re-embed + tiered merge, with
+      # a steady-state part count/debt and a canary answer identical to cycle 1 (merge contract §8).
+      - run: cargo test --release -p prism-cli --test soak -- --nocapture
+
+  storage:
+    name: the S11 gate — object store, cache trusts nothing, fetch budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The ObjectStore trait + local backend + fault wrapper: CAS create (two writers, one wins),
+      # truncated/injected reads are named-byte errors, a corrupt cache block is detected by content
+      # hash and repaired from the remote, remote-unavailable serves cache and names the miss (never
+      # a silent partial), and the rerank fetch budget bounds the cold tier with named exhaustion
+      # (storage contract §1/§2/§4/§6). NOTE: MinIO + the hand-rolled S3 client is the filed increment.
+      - run: cargo test --release -p prism-cli --test storage -- --nocapture
+
+  s3-minio:
+    name: the S11 MinIO gate — hand-rolled S3 client vs a real S3 server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Run the official MinIO as a background container (a `services:` block cannot override the
+      # server command, and the bitnami image's distribution is unreliable). Wait for health, then
+      # create the bucket with `mc`.
+      #
+      # **Pinned by digest, not `:latest` (D-070).** `minio/minio:latest` was momentarily broken:
+      # RELEASE.2025-09-06 returned `404 NoSuchKey` on an `If-None-Match: *` write-if-absent (the CAS
+      # create primitive publication needs), fixed the very next day in 2025-09-07. An unpinned tag
+      # rides that one-day upstream regression straight into the gate; the digest below is
+      # RELEASE.2025-09-07T16-13-09Z, the conformant release. The capability check
+      # (`assert_cas_capability`) is what catches such a regression — it is the reason we refuse a
+      # non-conformant backend loudly rather than fall back to last-writer-wins.
+      - name: start MinIO + create bucket
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && break
+            sleep 2
+          done
+          docker run --rm --network host --entrypoint sh \
+            minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727 -c \
+            "mc alias set local http://127.0.0.1:9000 minioadmin minioadmin && mc mb --ignore-existing local/prism"
+      # The hand-rolled S3 client (SigV4-signed HTTP/1.1) against a REAL S3 server — no mock in the
+      # path (storage contract §1): round-trip, ranged get, CAS create race (D-066/D-067), capability
+      # check. This is the gate that flips S11 from 🟡 to ✅ when green.
+      - run: cargo test --release -p prism-cli --test s3_minio -- --nocapture
+        env:
+          PRISM_S3_ENDPOINT: 127.0.0.1:9000
+          PRISM_S3_BUCKET: prism
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+
+      # **Durability chaos on real `prism` processes over MinIO (S12 inc3, D-076/D-077).** Each shard
+      # is a real child process whose cold tier + catalog mirror + write-ownership epochs live in its
+      # own bucket; a writer is crashed at every publication boundary, restarts, re-acquires ownership,
+      # and recovers exactly-once (byte-identical old-or-new), while a bystander shard stays green
+      # (containment). Single-threaded — single-node MinIO. The test creates its own per-shard buckets.
+      - run: cargo test --release -p prism-cli --test chaos_minio -- --nocapture --test-threads=1
+        env:
+          PRISM_S3_ENDPOINT: 127.0.0.1:9000
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+
+      # **D-071's falsification clause, measured here rather than remembered.** D-071 promotes the
+      # CAS catalog from mirror to authority and stakes that on one number: the per-commit authority
+      # round-trip is cheap enough that consensus is not needed. The targets were declared BEFORE
+      # measurement (testing/evidence/s12-verdict-spec.md), so this cannot be tuned to pass.
+      #
+      # It had been run once by hand with its numbers committed — a snapshot of one afternoon, not a
+      # standing check, while the primitive it measures (`cas_publish`) sits on the write path and
+      # can regress silently. `--ignored` because it is a benchmark that needs a real object store;
+      # unmeasurable is a failure here, never a quiet pass.
+      #
+      # If it goes red the answer is NOT to relax the target: missing it is D-071's own trigger to
+      # reconsider the CAS authority in favour of Raft, which is an architectural decision and not
+      # one a CI run gets to make. The scaling half of the S12 verdict stays a manual benchmark —
+      # it needs multiple hosts to mean anything, and this runner is one.
+      - run: >
+          cargo test --release -p prism-cli --test scaling
+          commit_rtt_meets_the_d071_authority_targets
+          -- --ignored --exact --nocapture
+        env:
+          PRISM_S3_ENDPOINT: 127.0.0.1:9000
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+
+  layout:
+    name: charter C-4 — the answer is a function of the data, not the layout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # THE PERMANENT GATE. One frozen logical corpus (C-2), materialized four ways -- different
+      # time windows, different ingest batchings, before and after a merge, one part to fifty-five.
+      # Every golden query must answer byte-identically across all of them, the same rows must
+      # train a byte-identical codebook, and the exact oracle must be layout-invariant even before
+      # the store is settled. This gate does not get retired when today's violations are fixed,
+      # because the CLASS is what recurs: a merge runs, a window is retuned, a batch size doubles.
+      - run: cargo test --release -p prism-cli --test layout -- --nocapture
+
+  golden-frozen:
+    name: the golden corpus has not moved (charter C-2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Compares COMMITTED BYTES against the manifest's checksums. A drift check that
+      # regenerates what it is checking tests nothing -- which is exactly what happened in S2.
+      - name: verify every frozen golden artifact
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, sys
+          m = json.load(open("testing/golden/MANIFEST.json"))
+          bad = 0
+          for version, v in m["versions"].items():
+              for name, meta in v["files"].items():
+                  path = f"testing/golden/{version}/{name}"
+                  actual = hashlib.sha256(open(path, "rb").read()).hexdigest()
+                  status = "ok " if actual == meta["sha256"] else "CHANGED"
+                  print(f"  {status} {path}")
+                  bad += actual != meta["sha256"]
+          if bad:
+              print("\nA FROZEN golden artifact was modified in place. Charter C-2: every receipt")
+              print("that names this corpus now describes something else. Restore it, and create a")
+              print("NEW VERSION with scripts/new-golden-corpus.sh instead.")
+              sys.exit(1)
+          print(f"\n  current corpus: {m['current']}")
+          PY
+
+  recall:
+    name: recall contract vs the exact oracle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: rebuild the golden store and check for drift + recall
+        run: |
+          set -euxo pipefail
+          P=./target/release/prism
+          $P init --path /tmp/golden --dim 64 --nlist 32 --pq-m 8 --seed 1234
+          $P ingest --path /tmp/golden --file testing/golden/v1/corpus.tsv
+          # Three checks, all of which must hold:
+          #   drift  — the exact answers must not have moved (inside `golden check`)
+          #   recall — the approximate path must find them, at a stated scan cost
+          #   TAIL   — and it must find them for EVERY query, not on average.
+          #
+          # The mean floor alone would have waved S0's `min recall = 0.000`
+          # straight through: a mean of 0.904 with five queries returning nothing
+          # is not a 90% system. --min-p1 is the floor that actually bites.
+          $P golden check --path /tmp/golden --golden testing/golden/v1/expected.json \
+             --candidates 200 --rerank 50 --min-recall 0.95 --min-p1 0.8
+
+  compat:
+    name: format compatibility fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: every released format must still open, verify, and answer
+        run: |
+          set -euxo pipefail
+          for v in v1 v2 v3; do
+            ./target/release/prism verify --path "testing/compat/$v"
+            ./target/release/prism fsck   --path "testing/compat/$v"
+            ./target/release/prism search --path "testing/compat/$v" \
+              --query "tool call timed out retrying" --k 3 --nprobe 8
+          done
+      - name: every corrupt fixture must be rejected, with a specific error
+        run: |
+          # NOT -e: `prism verify` returning non-zero on a corrupt fixture is the
+          # whole point of this step, and errexit would treat the first success as
+          # a fatal error and abort.
+          set +e
+          fail=0
+          for d in testing/compat/corrupt/*/ testing/compat/corrupt-v3/*/; do
+            msg=$(./target/release/prism verify --path "$d" 2>&1 | head -1)
+            if ./target/release/prism verify --path "$d" >/dev/null 2>&1; then
+              echo "FAIL: corrupt fixture $d was ACCEPTED"
+              fail=1
+            elif ! echo "$msg" | grep -q "corrupt data:"; then
+              # A generic io error is not good enough. An operator woken at 3am
+              # cannot act on "failed to fill whole buffer" -- the reader has to
+              # say which byte lied.
+              echo "FAIL: $d was rejected, but not with a specific error: $msg"
+              fail=1
+            else
+              echo "ok: $(basename $d) -> ${msg:0:90}"
+            fi
+          done
+          exit $fail
+
+  quickstart:
+    name: the README quickstart actually works
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Extracts the shell block out of README.md and runs it. Not a copy of the
+      # quickstart -- the quickstart. If a command in the README does not work,
+      # this job is red.
+      - run: ./scripts/check-readme-quickstart.sh
+
+  baselines:
+    name: baselines are reproducible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      # The committed baselines.json is a machine-generated artifact. This proves
+      # `prism bench` still runs and still produces one; it does NOT assert on the
+      # timings, which are machine-dependent and would make CI flaky for no gain.
+      # What it does assert is the thing that must never regress silently: recall.
+      - name: regenerate and check the recall floor
+        run: |
+          set -euxo pipefail
+          ./target/release/prism bench --rows 20000 --kind zipf --out /tmp/baselines.json >/dev/null
+          python3 - <<'PY'
+          import json
+          b = json.load(open("/tmp/baselines.json"))
+          print(json.dumps(b, indent=2))
+          assert b["recall_at_10"] >= 0.95, f"mean recall regressed to {b['recall_at_10']}"
+          # The floor that actually bites. A mean can be 0.90 while queries return
+          # nothing at all; the tail is what notices.
+          assert b["zero_recall_queries"] == 0, \
+              f"{b['zero_recall_queries']} queries returned NOTHING at the default nprobe"
+          assert b["p1_recall_at_10"] >= 0.8, f"p1 recall regressed to {b['p1_recall_at_10']}"
+          assert b["mean_scan_fraction"] < 0.5, \
+              f"recall was bought by scanning {b['mean_scan_fraction']:.1%} of the data"
+          assert b["rows_admitted"] + b["rows_dead_lettered"] == b["rows_offered"], \
+              "rows went missing between offered and stored"
+          print("recall floor holds, and no row vanished.")
+          PY

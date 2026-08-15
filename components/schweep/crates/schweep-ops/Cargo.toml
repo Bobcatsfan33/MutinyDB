@@ -1,0 +1,18 @@
+[package]
+name = "schweep-ops"
+description = "Circuit operators: the linear ones in C1, join in C2, aggregates in C3."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+schweep-plan.workspace = true
+schweep-state.workspace = true
+schweep-zset.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

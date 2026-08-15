@@ -243,3 +243,11 @@ Addendum (2026-08-11):
   (1,824 stars, Rust, at time of check)
 - Schweep availability was checked directly against the crates.io, npm, PyPI and GitHub APIs and
   `dig`, on the addendum date.
+
+## Addendum — 2026-08-14: the rename is executed in the consolidated source
+
+Schweep's D-21 rename landed before a v0.1 tag or crate publication. MD-6 now imports the renamed
+source tree directly into MutinyDB, so the earlier deliberate deferral no longer describes the live
+repository. MD-1, MD-2, MD-3, the roadmap, workspace comments, and CI labels are rewritten now,
+during the M0 reset, rather than waiting for M1. Historical discussion in this record keeps the old
+name where it describes the choice that was made.

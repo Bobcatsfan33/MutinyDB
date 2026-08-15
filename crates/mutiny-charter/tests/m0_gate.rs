@@ -1,14 +1,14 @@
 //! The M0 exit gate, and the proof that it can fail.
 //!
-//! `CONSOLIDATION-ROADMAP.md` §4 M0: *"Exit: MD-1…MD-4 merged; CI skeleton (fmt/clippy/test/
-//! no-egress) green on an empty workspace."* The first half of that sentence is what this file
+//! `CONSOLIDATION-ROADMAP.md` §4 M0: *"Exit: MD-1…MD-4 and MD-6 merged; every component tree
+//! reproduced by the lock; CI skeleton green."* The charter half of that sentence is what this file
 //! asserts. The second half is the workflow that runs it.
 //!
 //! Half of these tests exist to watch the gate go red on purpose. A validator that has only ever
 //! been run against valid input is an untested validator, and an untested validator on a CI job
 //! is worse than no job at all, because the green tick is believed.
 
-// Explicit, as Current's CI comment requires: the workspace denies these in library code, and a
+// Explicit, as Schweep's CI comment requires: the workspace denies these in library code, and a
 // test that re-enables them says so out loud.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -194,7 +194,7 @@ fn a_record_that_exists_but_is_unlisted_in_the_index_is_refused() {
 }
 
 /// A scratch directory. Deterministic name per test-thread, no wall clock and no randomness —
-/// Current's D-6 discipline, which this repository inherits from the day it has any code at all.
+/// Schweep's D-6 discipline, which this repository inherits from the day it has any code at all.
 fn tempdir() -> std::path::PathBuf {
     let name = std::thread::current()
         .name()

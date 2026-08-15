@@ -1,0 +1,28 @@
+[package]
+name = "schweep-batch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+schweep-zset.workspace = true
+schweep-plan.workspace = true
+schweep-ops.workspace = true
+schweep-state.workspace = true
+schweep-circuit.workspace = true
+schweep-sql.workspace = true
+schweep-memo.workspace = true
+schweep-log.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+parquet.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+schweep-oracle.workspace = true
+
+[lints]
+workspace = true

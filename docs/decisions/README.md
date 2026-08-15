@@ -14,10 +14,10 @@ a record goes missing, reverts to a draft, decides before it weighs, or weighs o
 | [MD-2](MD-2.md) | The Delta Bridge contract — substrate commit + Loom envelope → Current epoch input | M0, built M1 | Accepted |
 | [MD-3](MD-3.md) | The unified SQL surface, phased | M0, built M2–M6 | Accepted |
 | [MD-4](MD-4.md) | Naming and trademark sweep: "MutinyDB" and "Current" | M0, executed M8 | Accepted, addendum 2026-08-11 |
+| [MD-6](MD-6.md) | One official repository; exact, quarantined component imports | M0 reset | Accepted; partially supersedes MD-1 and roadmap §6 |
 
-**MD-4's addendum** resolves the engine's name: it becomes **SCHWEEP**, by the engine's own D-21.
-This repository's "Current" references are rewritten once, at M1 open, not now.
+**MD-4's addenda** resolve and execute the engine rename to **SCHWEEP**. The 2026-08-14 M0 reset
+rewrites the live MD-1…MD-3 references because MD-6 imports the renamed source before M1.
 
 **Reserved.** `CONSOLIDATION-ROADMAP.md` §4 M5 reserves **MD-5** for the forked-standing-state
-fallback, to be written when the M5 spike returns its verdict. **MD-6** is the first free number —
-no longer nominated for the rename, which MD-4 has now settled.
+fallback, to be written when the M5 spike returns its verdict. **MD-7** is the first free number.

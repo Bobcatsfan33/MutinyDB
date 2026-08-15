@@ -1,0 +1,281 @@
+name: CI
+
+# Four jobs, all of which must be green for a sprint to be done (ARCHITECTURE.md §6 C0):
+# fmt, clippy -D warnings, test, and a job that proves the suite needs no network.
+#
+# "Green locally" is not done. Green here is done.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # 03:17 UTC daily. An odd minute on purpose: the top of the hour is when every other project's
+    # nightly fires, and a queued job is a job that reports late.
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail rather than hang if the network is unexpectedly involved.
+  CARGO_NET_RETRY: 2
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy -D warnings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # --all-targets so tests and benches are linted too: the workspace denies unwrap/expect/
+      # panic in library code, and the allowances that re-enable them in tests must be explicit.
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-features --locked
+      # The differential gates are the ones that matter; run them again alone so their numbers
+      # are legible in the job log rather than buried among the unit tests. A green tick that
+      # does not say how many scenarios ran is not evidence of much.
+      - name: The C0 differential gate (oracle vs oracle — proves the harness)
+        run: cargo test -p schweep-differential --locked --test oracle_vs_oracle -- --nocapture
+      - name: The C1 differential gate (engine vs oracle, rung 1 — proves I-1)
+        run: cargo test -p schweep-differential --locked --test c1_engine_vs_oracle -- --nocapture
+      - name: The C2 differential gate (join — the three-term rule)
+        run: cargo test -p schweep-differential --locked --test c2_join -- --nocapture
+      - name: The C3 differential gate (aggregates, distinct, and the whole population)
+        run: cargo test -p schweep-differential --locked --test c3_aggregate -- --nocapture
+      - name: The C4 crash gate (10,000 crash-and-recover cycles)
+        run: cargo test -p schweep-crash --locked --test c4_crash_gate -- --nocapture
+      - name: The C9 network gate (the harness over a socket, and I-6 through three doors)
+        run: cargo test -p schweep-differential --locked --test c9_network -- --nocapture
+      - name: The C9 kill -9 matrix (1,000 real SIGKILLs under load)
+        run: cargo test -p schweep-server --locked --test kill9 -- --nocapture --test-threads=1
+      - name: The C9 subscriber-crash gate (kill the subscriber, resume by token)
+        run: cargo test -p schweep-server --locked --test subscriber_crash -- --nocapture
+
+  no-network:
+    name: no-network
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The only step permitted to reach the network. Everything after it runs with the network
+      # removed, so anything that tries to fetch, phone home, or reach a fixture server fails.
+      - name: Fetch dependencies (the only networked step)
+        run: cargo fetch --locked
+
+      - name: Build the suite offline
+        run: cargo test --workspace --all-features --locked --offline --no-run
+
+      # A no-network job that silently still has network proves nothing, so the sandbox is
+      # verified before it is trusted: unshare must work, and inside it a connection must fail.
+      - name: Prove the sandbox really has no network
+        run: |
+          set -euo pipefail
+          # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor, so `unshare -rn`
+          # fails on a stock runner. Lifting that one restriction is enough; the alternative —
+          # running the suite as root under `sudo unshare -n` — would test the suite under a
+          # different user than every other job.
+          if ! unshare -rn true 2>/dev/null; then
+            echo "unprivileged user namespaces are restricted; enabling them for this runner"
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if ! unshare -rn true; then
+            echo "::error::unshare -rn is unavailable on this runner; this job cannot prove the" \
+                 "absence of network and must not pass by default"
+            exit 1
+          fi
+          if unshare -rn timeout 5 bash -c 'exec 3<>/dev/tcp/1.1.1.1/53' 2>/dev/null; then
+            echo "::error::a TCP connection succeeded inside the sandbox; the no-network job" \
+                 "would be measuring nothing"
+            exit 1
+          fi
+
+          # C9's gates bind 127.0.0.1 on an ephemeral port, and a fresh network namespace has a
+          # loopback interface that exists but is DOWN — so the suite must bring it up, and this
+          # checks that doing so works before the run depends on it. Loopback is not the network
+          # this job is about: the check above is what establishes that the outside world is
+          # unreachable, and bringing `lo` up does not change that.
+          if ! unshare -rn sh -c 'ip link set lo up && ip addr show lo | grep -q "inet 127.0.0.1"'; then
+            echo "::error::loopback cannot be brought up inside the sandbox, so the C9 network" \
+                 "gates cannot run there and this job would be skipping them"
+            exit 1
+          fi
+          echo "sandbox verified: unshare works, outbound TCP fails, and loopback works inside it"
+
+      - name: Run the whole suite with no network
+        # `ip link set lo up` first: see the verification step above. Without it every test that
+        # binds 127.0.0.1 — the whole C9 network door — fails for a reason that has nothing to do
+        # with what this job exists to prove.
+        run: |
+          unshare -rn sh -c 'ip link set lo up && exec cargo test --workspace --all-features --locked --offline'
+
+  # The fsync path, in bulk, on a schedule.
+  #
+  # It observes nothing an in-process crash could not observe with fsync deferred — see
+  # docs/DURABILITY.md §5 and the test's own module docs. It exists so that every sync_all call in the
+  # log and the checkpoint protocol is exercised in bulk rather than by a handful of unit tests,
+  # because a path that is never run in bulk quietly stops being reached. It is NOT a power-loss test.
+  #
+  # Deliberately absent from the `ci` check's `needs`: a scheduled job must not gate a push.
+  nightly-full-sync:
+    name: nightly crash gate (SyncPolicy::Full)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: The crash gate with every write fsynced
+        run: cargo test -p schweep-crash --locked --test nightly_full_sync -- --ignored --nocapture
+
+  # The C8 ceiling gate: operator state ten times a **fixed** memory ceiling, completing with flat
+  # memory (§6 C8).
+  #
+  # The ceiling is applied here, by this job, and never inherited from the runner — that is §6 C8's
+  # pitfall in as many words. `systemd-run --scope -p MemoryMax=` puts the test in a cgroup with a hard
+  # limit; the test then *reads the limit back* from the cgroup and, with
+  # `CURRENT_CEILING_REQUIRED=1`, fails if there is none. So the job cannot silently degrade into a
+  # test that proves nothing on a machine with memory to spare: if the ceiling does not apply, the gate
+  # fails rather than passes.
+  state-ceiling:
+    name: state ceiling (cgroup, 10x)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Built outside the scope, because compiling under a 128 MiB ceiling would OOM the compiler
+      # rather than the test — and the claim is about the engine, not about rustc.
+      - name: Build the ceiling gate
+        run: cargo test --release -p schweep-soak --test c8_ceiling --locked --no-run
+
+      - name: Run it under a fixed 128 MiB ceiling
+        run: |
+          set -euo pipefail
+          # The test binary, found by glob rather than by parsing cargo's JSON: the `.d` files share the
+          # prefix, so they are filtered out, and there is exactly one binary because `--test` names one.
+          binary=""
+          for candidate in target/release/deps/c8_ceiling-*; do
+            case "$candidate" in
+              *.d) continue ;;
+            esac
+            if [ -x "$candidate" ]; then binary="$candidate"; fi
+          done
+          if [ -z "$binary" ]; then
+            echo "::error::no c8_ceiling test binary was built"
+            exit 1
+          fi
+          echo "running $binary under MemoryMax=128M"
+          sudo systemd-run --scope --quiet \
+            -p MemoryMax=128M -p MemorySwapMax=0 \
+            --setenv=CURRENT_CEILING_REQUIRED=1 \
+            --setenv=TMPDIR="$RUNNER_TEMP" \
+            "$binary" --nocapture --test-threads=1
+
+  # The C9 memo-ceiling gate: a query registered LATE, over an accumulated input three times a **fixed**
+  # memory ceiling (§6 C9, discharging C8's forward pointer).
+  #
+  # Same discipline as the C8 job above and for the same reason: the ceiling is applied here, read back by
+  # the test, and `CURRENT_CEILING_REQUIRED=1` makes its absence a failure rather than a smoke test.
+  #
+  # This job runs the MEMORY half only. The correctness half — a late registration compared against the
+  # oracle over a history small enough to recompute — is `c9_late_registration`, a separate test binary that
+  # the `test` job runs, because resident memory is a property of the process and a sibling test in the same
+  # binary inflates the measurement.
+  memo-ceiling:
+    name: memo ceiling (cgroup, late registration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the memo-ceiling gate
+        run: cargo test --release -p schweep-soak --test c9_memo_ceiling --locked --no-run
+
+      - name: Run it under a fixed 128 MiB ceiling
+        run: |
+          set -euo pipefail
+          binary=""
+          for candidate in target/release/deps/c9_memo_ceiling-*; do
+            case "$candidate" in
+              *.d) continue ;;
+            esac
+            if [ -x "$candidate" ]; then binary="$candidate"; fi
+          done
+          if [ -z "$binary" ]; then
+            echo "::error::no c9_memo_ceiling test binary was built"
+            exit 1
+          fi
+          echo "running $binary under MemoryMax=128M"
+          sudo systemd-run --scope --quiet \
+            -p MemoryMax=128M -p MemorySwapMax=0 \
+            --setenv=CURRENT_CEILING_REQUIRED=1 \
+            --setenv=TMPDIR="$RUNNER_TEMP" \
+            "$binary" --nocapture --test-threads=1
+
+  # The C9 soak: a full window of server load, on a schedule.
+  #
+  # Nightly rather than per-push because it is minutes of wall clock and its instrument is a per-epoch
+  # coefficient, which needs a long window to be worth measuring. Like the nightly crash gate it is
+  # deliberately absent from the `ci` check's `needs`: a scheduled job must not gate a push.
+  nightly-soak:
+    name: nightly soak (schweepd under load)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: A full window under load, with the RSS curve sampled per epoch
+        env:
+          # Ten times the per-push window. The gate's claim is a per-epoch coefficient, and a longer
+          # window measures it more sharply — a leak of a few hundred bytes an epoch is 3 MB at 10,000
+          # epochs and unmissable.
+          SCHWEEP_SOAK_EPOCHS: "10000"
+        run: cargo test --release -p schweep-soak --locked --test c9_server_soak -- --nocapture
+
+  # A single required check, so branch protection has one name to point at rather than four that
+  # drift as jobs are added.
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy, test, no-network, state-ceiling, memo-ceiling]
+    if: always()
+    steps:
+      - name: Fail if any job did not succeed
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "::error::at least one CI job did not succeed"
+            exit 1
+          fi
+          echo "all CI jobs succeeded"

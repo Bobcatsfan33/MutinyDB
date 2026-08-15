@@ -1,0 +1,61 @@
+{
+  "$comment": [
+    "C8 · what operator state costs, and how far EXPLAIN STATE's byte model is from it (I-10).",
+    "Regenerate: cargo run --release -p schweep-memo --bin state-costs > testing/evidence/c8-state-costs.json",
+    "Deterministic: the same writes produce the same bytes. No clock, no threads.",
+    "Checked by testing/differential/tests/evidence.rs, which recomputes the running-memo",
+    "rounds and asserts the recorded tolerance still covers the observed error."
+  ],
+  "redb_version": "4",
+  "synthetic": {
+    "bytes_when_empty": 1056768,
+    "note": "A redb file preallocates, then truncates on commit: at 1,500 entries it is SMALLER than when empty. So a marginal bytes-per-entry figure is not even positive across this range, and the model has to be fitted to totals.",
+    "measurements": [
+      { "entries": 100, "key_width": 2, "bytes": 1056768, "bytes_per_entry_total": 10567 },
+      { "entries": 500, "key_width": 2, "bytes": 1056768, "bytes_per_entry_total": 2113 },
+      { "entries": 1000, "key_width": 2, "bytes": 1056768, "bytes_per_entry_total": 1056 },
+      { "entries": 1500, "key_width": 2, "bytes": 593920, "bytes_per_entry_total": 395 },
+      { "entries": 2000, "key_width": 2, "bytes": 610304, "bytes_per_entry_total": 305 },
+      { "entries": 3000, "key_width": 2, "bytes": 610304, "bytes_per_entry_total": 203 },
+      { "entries": 5000, "key_width": 2, "bytes": 610304, "bytes_per_entry_total": 122 },
+      { "entries": 10000, "key_width": 2, "bytes": 1216512, "bytes_per_entry_total": 121 },
+      { "entries": 20000, "key_width": 2, "bytes": 2428928, "bytes_per_entry_total": 121 },
+      { "entries": 50000, "key_width": 2, "bytes": 4853760, "bytes_per_entry_total": 97 },
+      { "entries": 200000, "key_width": 2, "bytes": 14553088, "bytes_per_entry_total": 72 },
+      { "entries": 500000, "key_width": 2, "bytes": 58200064, "bytes_per_entry_total": 116 },
+      { "entries": 100, "key_width": 4, "bytes": 1056768, "bytes_per_entry_total": 10567 },
+      { "entries": 500, "key_width": 4, "bytes": 1056768, "bytes_per_entry_total": 2113 },
+      { "entries": 1000, "key_width": 4, "bytes": 1056768, "bytes_per_entry_total": 1056 },
+      { "entries": 1500, "key_width": 4, "bytes": 622592, "bytes_per_entry_total": 415 },
+      { "entries": 2000, "key_width": 4, "bytes": 647168, "bytes_per_entry_total": 323 },
+      { "entries": 3000, "key_width": 4, "bytes": 647168, "bytes_per_entry_total": 215 },
+      { "entries": 5000, "key_width": 4, "bytes": 647168, "bytes_per_entry_total": 129 },
+      { "entries": 10000, "key_width": 4, "bytes": 1290240, "bytes_per_entry_total": 129 },
+      { "entries": 20000, "key_width": 4, "bytes": 2576384, "bytes_per_entry_total": 128 },
+      { "entries": 50000, "key_width": 4, "bytes": 10293248, "bytes_per_entry_total": 205 },
+      { "entries": 200000, "key_width": 4, "bytes": 41160704, "bytes_per_entry_total": 205 },
+      { "entries": 500000, "key_width": 4, "bytes": 82317312, "bytes_per_entry_total": 164 }
+    ],
+    "bytes_per_entry_at_scale": [72, 205]
+  },
+  "running_memo": {
+    "note": "Two standing queries on redb, 4,000 rows per round. `reported_floor` is the bound EXPLAIN STATE publishes; `reported_typical` is a figure for ordinary key widths and is NOT a bound; `actual` is what the spill directory holds. The reconciliation gate asserts actual >= floor, and asserts that zero reported entries means no footprint beyond the empty files.",
+    "rounds": [
+      { "round": 0, "entries": 4997, "backends": 2, "reported_floor": 239856, "reported_typical": 1024385, "actual": 2113536, "bytes_per_entry": 423.0 },
+      { "round": 1, "entries": 8997, "backends": 2, "reported_floor": 431856, "reported_typical": 1844385, "actual": 1347584, "bytes_per_entry": 149.8 },
+      { "round": 2, "entries": 12997, "backends": 2, "reported_floor": 623856, "reported_typical": 2664385, "actual": 1347584, "bytes_per_entry": 103.7 },
+      { "round": 3, "entries": 16997, "backends": 2, "reported_floor": 815856, "reported_typical": 3484385, "actual": 2093056, "bytes_per_entry": 123.1 },
+      { "round": 4, "entries": 20997, "backends": 2, "reported_floor": 1007856, "reported_typical": 4304385, "actual": 2093056, "bytes_per_entry": 99.7 },
+      { "round": 5, "entries": 24997, "backends": 2, "reported_floor": 1199856, "reported_typical": 5124385, "actual": 2093056, "bytes_per_entry": 83.7 },
+      { "round": 6, "entries": 28997, "backends": 2, "reported_floor": 1391856, "reported_typical": 5944385, "actual": 2838528, "bytes_per_entry": 97.9 },
+      { "round": 7, "entries": 32997, "backends": 2, "reported_floor": 1583856, "reported_typical": 6764385, "actual": 2838528, "bytes_per_entry": 86.0 },
+      { "round": 8, "entries": 36997, "backends": 2, "reported_floor": 1775856, "reported_typical": 7584385, "actual": 2838528, "bytes_per_entry": 76.7 },
+      { "round": 9, "entries": 40997, "backends": 2, "reported_floor": 1967856, "reported_typical": 8404385, "actual": 2838528, "bytes_per_entry": 69.2 },
+      { "round": 10, "entries": 44997, "backends": 2, "reported_floor": 2159856, "reported_typical": 9224385, "actual": 5074944, "bytes_per_entry": 112.8 },
+      { "round": 11, "entries": 48997, "backends": 2, "reported_floor": 2351856, "reported_typical": 10044385, "actual": 5074944, "bytes_per_entry": 103.6 }
+    ],
+    "rounds_above_the_reported_floor": 12,
+    "worst_observed_bytes_per_entry": 423.0,
+    "rounds_total": 12
+  }
+}

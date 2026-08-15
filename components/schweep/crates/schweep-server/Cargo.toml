@@ -1,0 +1,46 @@
+[package]
+name = "schweep-server"
+description = "schweepd: one process over the embedded engine — network doors, admission, subscriptions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+schweep-zset.workspace = true
+schweep-plan.workspace = true
+schweep-state.workspace = true
+schweep-circuit.workspace = true
+schweep-sql.workspace = true
+schweep-memo.workspace = true
+schweep-batch.workspace = true
+schweep-log.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+schweep-oracle.workspace = true
+# The seeded generator. The house rule is that randomness lives in one place (D-6), and the kill point of a
+# crash cycle is randomness. A dev-dependency cycle — `schweep-differential` depends on this crate — which
+# cargo permits because a test's dependencies are not part of the library's graph, the same arrangement
+# `testing/differential` already relies on for `schweep-soak`.
+schweep-differential.workspace = true
+
+[[bin]]
+name = "schweepd"
+path = "src/bin/schweepd.rs"
+
+# A subscriber that can be killed, for the subscriber-crash gate. A binary rather than a test helper
+# because "kill the subscriber" has to kill something.
+# The measuring tool behind C9's two ledger entries.
+[[bin]]
+name = "c9-costs"
+path = "src/bin/c9-costs.rs"
+
+[[bin]]
+name = "schweep-subscriber"
+path = "src/bin/schweep-subscriber.rs"
+
+[lints]
+workspace = true

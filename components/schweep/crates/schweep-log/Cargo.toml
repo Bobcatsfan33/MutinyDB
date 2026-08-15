@@ -1,0 +1,17 @@
+[package]
+name = "schweep-log"
+description = "The input log: a directory of files, epoch sealing, exactly-once admission."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+schweep-state.workspace = true
+schweep-zset.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

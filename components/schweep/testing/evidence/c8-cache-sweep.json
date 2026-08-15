@@ -1,0 +1,30 @@
+{
+  "$comment": [
+    "C8 · how redb's page cache steers resident memory (I-10).",
+    "Regenerate: cargo run --release -p schweep-soak --bin cache-sweep > testing/evidence/c8-cache-sweep.json",
+    "MACHINE-DEPENDENT: resident memory is an allocator and kernel figure, so no test",
+    "recomputes this. The deterministic half of the C8 measurements is c8-state-costs.json,",
+    "which IS recomputed and compared by testing/differential/tests/evidence.rs.",
+    "The sweep across cache sizes was performed by editing CACHE_BYTES and re-running;",
+    "the recorded rows are the measurements that produced the ledger's justification."
+  ],
+  "cache_sweep": [
+    { "cache_bytes": 1048576,  "peak_rss_bytes": 38420480,  "post_warm_up_growth": 0.168 },
+    { "cache_bytes": 8388608,  "peak_rss_bytes": 67485696,  "post_warm_up_growth": 0.370 },
+    { "cache_bytes": 33554432, "peak_rss_bytes": 106201088, "post_warm_up_growth": 1.149 }
+  ],
+  "at_the_compiled_setting": {
+    "cache_bytes": 1048576,
+    "target_state_bytes": 1073741824,
+    "state_bytes_reached": 1077944320,
+    "rows_inserted": 234750,
+    "samples": 314,
+    "warm_up_samples": 48,
+    "peak_rss_bytes": 38371328,
+    "first_quarter_mean_rss": 35190598,
+    "last_quarter_mean_rss": 34573219,
+    "post_warm_up_rss_growth": -0.0175,
+    "post_warm_up_state_growth": 6.9996,
+    "state_to_rss_ratio": 28.1
+  }
+}

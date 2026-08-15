@@ -1,0 +1,24 @@
+{
+  "$comment": "Receipt for the scenario generator's tuned constants (I-10). Regenerate with: cargo run -p schweep-differential --bin generator-coverage > testing/evidence/c0-generator-coverage.json. A deterministic function of the seed range: no timing, no threads, machine-independent.",
+  "seeds": 1000,
+  "scenarios": 1000,
+  "epochs": 4568,
+  "comparisons": 5568,
+  "non_empty_answer": 525,
+  "empty_input_scenarios": 133,
+  "scenarios_with_an_empty_epoch": 632,
+  "scenarios_with_a_retraction": 833,
+  "scenarios_with_a_first_epoch_retraction": 386,
+  "scenarios_with_a_weight_above_one": 803,
+  "join_both_tables_populated": 394,
+  "join_bare_join_non_empty": 281,
+  "comparisons_that_raised": 59,
+  "scenarios_that_raised": 18,
+  "by_family": {
+    "aggregate": { "scenarios": 241, "non_empty_answer": 127 },
+    "filter-project": { "scenarios": 252, "non_empty_answer": 175 },
+    "join": { "scenarios": 250, "non_empty_answer": 126 },
+    "join-aggregate": { "scenarios": 257, "non_empty_answer": 97 }
+  },
+  "operations": ["InsertNew", "InsertDuplicate", "RetractPartial", "RetractAll", "UpdateInPlace", "ChurnSameEpoch"]
+}
