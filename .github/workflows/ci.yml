@@ -145,6 +145,26 @@ jobs:
       - name: Prove the frozen composed semantic contract and PrismDB equivalence
         run: cargo test -p mutiny-semantic --locked --test m2_gate -- --nocapture
 
+  m3-trust:
+    name: M3 mounted trust, Loom demo, and four model oracles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Prove capability-scoped branch results and propose-not-execute separation
+        run: cargo test -p mutiny-trust --locked --test m3_gate -- --nocapture
+      - name: Run Loom's scripted buyer demo verbatim through its MCP door
+        run: cargo test --manifest-path components/loomdb/Cargo.toml -p loom-mcp --locked --test demo the_q3_demo_runs_verbatim -- --nocapture
+      - name: Re-run Loom's four unmodified model oracles on the imported tree
+        run: |
+          cargo test --manifest-path components/loomdb/Cargo.toml -p loom-branch --locked --test oracle
+          cargo test --manifest-path components/loomdb/Cargo.toml -p loom-provenance --locked --test oracle
+          cargo test --manifest-path components/loomdb/Cargo.toml -p loom-memory --locked --test isolation
+          cargo test --manifest-path components/loomdb/Cargo.toml -p loom-policy --locked --test oracle
+
   no-egress:
     name: no-egress
     runs-on: ubuntu-latest
@@ -195,7 +215,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [component-integrity, component-compatibility, fmt, clippy, test, m1-bridge, m2-semantic, no-egress]
+    needs: [component-integrity, component-compatibility, fmt, clippy, test, m1-bridge, m2-semantic, m3-trust, no-egress]
     if: always()
     steps:
       - name: Fail if any job did not succeed

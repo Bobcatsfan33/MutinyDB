@@ -1,0 +1,17 @@
+[package]
+name = "mutiny-trust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Loom trust plane mounted over branch-scoped MutinyDB result stores."
+
+[dependencies]
+loom-action.workspace = true
+loom-branch.workspace = true
+loom-core.workspace = true
+loom-policy.workspace = true
+mutiny-semantic = { path = "../mutiny-semantic" }
+thiserror.workspace = true
+
+[lints]
+workspace = true
