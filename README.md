@@ -59,10 +59,14 @@ keeps dashboards current, and irreversible external actions are listed first, wi
 registered compensations. Other databases answer "we don't know what it touched." This one
 un-touches it.
 
-**Forked standing state.** A session is a branch of the database — an O(1) fork of a
-content-addressed store. An agent tries three hypotheses on three branches, each with its own
-branch-scoped, continuously-current answers, merges the winner at record granularity, and rewinds
-the rest — auditable, never destroyed.
+**Forked standing state.** A session is a branch of the database — the *data* forks in O(1) on a
+content-addressed store. An agent tries hypotheses on branches, each with its own branch-scoped,
+continuously-current answers, merges the winner's divergence under policy re-run, and rewinds the
+rest — auditable, never destroyed. Honest economics, per [MD-5](docs/decisions/MD-5.md): at v1
+the *standing answers* fork by hydration — **O(state), measured and published**
+([ledger](crates/mutiny-forks/evidence/m5-fork-cost.json)) — and O(1) fork of live answers is
+post-v1 work on the engine's own track, with the spike's copy-on-write measurements as its
+baseline.
 
 ## Architecture
 
@@ -127,21 +131,32 @@ blocked component marked admitted. That distinction is enforced, not editorial.
   receipt; untainted branches and bystander tenants are untouched; taints compose; and the taint
   path killed at every seam resumes without ever half-healing.
 
+- **M5 — forked standing state, honestly.** The spike ran first against MD-5's pre-committed
+  criteria; the verdict took the fallback deliberately. A durable fork hydrates the child's
+  standing answers from the parent — **O(state), measured, asserted by the gate so the O(1) claim
+  cannot quietly return** — both branches maintain independently, merge follows Loom's law
+  (policy re-run at merge time, all-or-nothing, marker-deduplicated so +3 never becomes +6),
+  rewind returns the state accounting exactly to baseline, recovery replays the lineage to
+  byte-identical answers through injected mid-fork and mid-merge crashes, and one taint call
+  heals the parent **and** the fork's inherited state on the forked incident corpus.
+
 Details: [`docs/M1-BRIDGE.md`](docs/M1-BRIDGE.md) · [`docs/M2-SEMANTIC.md`](docs/M2-SEMANTIC.md) ·
-[`docs/M3-TRUST.md`](docs/M3-TRUST.md) · [`docs/M4-TAINT.md`](docs/M4-TAINT.md)
+[`docs/M3-TRUST.md`](docs/M3-TRUST.md) · [`docs/M4-TAINT.md`](docs/M4-TAINT.md) ·
+[`docs/M5-FORKS.md`](docs/M5-FORKS.md)
 
 ## Status — what is and is not ready
 
 **Not approved for production. Not a software release candidate.**
 
-Still open, named rather than implied: durable forked operator state (M5), a supported `mutinyd`
-binary (M6), fleet operation (M7), external assurance and production approval (M8). Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
+Still open, named rather than implied: a supported `mutinyd` binary (M6), fleet operation (M7),
+external assurance and production approval (M8) — and O(1) fork of live answers, which MD-5
+deliberately moved post-v1 with its spike evidence on record. Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
 PrismDB's admission requires a release and a live KMS receipt. The roadmap runs on exit gates, not
 dates.
 
 | Phase | M1 bridge | M2 semantic | M3 trust | M4 taint | M5 forks | M6 mutinyd | M7 fleet | M8 release |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | ✅ | ✅ | ✅ | ✅ | ◎ | ◎ | ◎ | ◎ |
+| | ✅ | ✅ | ✅ | ✅ | ✅ | ◎ | ◎ | ◎ |
 
 ## The evidence culture
 

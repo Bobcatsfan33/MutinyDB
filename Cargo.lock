@@ -746,6 +746,7 @@ dependencies = [
  "loom-core",
  "loom-policy",
  "mutiny-bridge",
+ "mutiny-forks",
  "mutiny-semantic",
  "mutiny-taint",
  "mutiny-trust",

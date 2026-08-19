@@ -37,6 +37,15 @@ ALLOWED_COMPONENT_EDGES = {
         "schweep-server",
         "schweep-zset",
     },
+    # M5: the fork-lineage library is pure (loom-core + zset types only as normal deps); the
+    # loom-branch and substrate edges belong to tests/m5_spike.rs — the committed CoW spike
+    # evidence behind MD-5's verdict — and cargo metadata counts dev-dependencies.
+    "mutiny-forks": {
+        "loom-branch",
+        "loom-core",
+        "schweep-zset",
+        "substrate-pager",
+    },
     # M4: the dev-only incident host composes every plane the supported M6 binary eventually
     # will; it is not that binary and produces no release artifact.
     "mutiny-incident": {

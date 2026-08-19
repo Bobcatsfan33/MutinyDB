@@ -366,6 +366,82 @@ impl OperatorTrustPlane {
         Ok(healed)
     }
 
+    /// One branch's mounted standing-state bytes (top-k and groupings together).
+    pub fn branch_state_bytes(&self, branch: &BranchId) -> Result<usize, TrustError> {
+        let queries = self
+            .state
+            .queries
+            .read()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let groups = self
+            .state
+            .groups
+            .read()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let query_bytes: usize = queries
+            .get(branch)
+            .map(|standing| standing.values().map(SemanticTopK::state_bytes).sum())
+            .unwrap_or(0);
+        let group_bytes: usize = groups
+            .get(branch)
+            .map(|standing| standing.values().map(SemanticGroups::state_bytes).sum())
+            .unwrap_or(0);
+        Ok(query_bytes + group_bytes)
+    }
+
+    /// Total mounted standing-state bytes across every branch — the accounting the M5 rewind
+    /// gate requires to return to its pre-fork baseline.
+    pub fn mounted_state_bytes(&self) -> Result<usize, TrustError> {
+        let queries = self
+            .state
+            .queries
+            .read()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let groups = self
+            .state
+            .groups
+            .read()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let query_bytes: usize = queries
+            .values()
+            .flat_map(|standing| standing.values())
+            .map(SemanticTopK::state_bytes)
+            .sum();
+        let group_bytes: usize = groups
+            .values()
+            .flat_map(|standing| standing.values())
+            .map(SemanticGroups::state_bytes)
+            .sum();
+        Ok(query_bytes + group_bytes)
+    }
+
+    /// Discard a branch's standing operators (M5 rewind). Loom's branch and its committed history
+    /// remain — auditable, never destroyed — but the branch's circuit state is torn down and its
+    /// bytes return to the mount's baseline: the C6 teardown discipline, composed. Idempotent —
+    /// rewinding an absent branch frees zero, because a resumed rewind must not be an error.
+    /// Returns the bytes freed.
+    pub fn rewind_branch(&self, branch: &BranchId) -> Result<usize, TrustError> {
+        let mut queries = self
+            .state
+            .queries
+            .write()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let mut groups = self
+            .state
+            .groups
+            .write()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let query_bytes: usize = queries
+            .remove(branch)
+            .map(|standing| standing.values().map(SemanticTopK::state_bytes).sum())
+            .unwrap_or(0);
+        let group_bytes: usize = groups
+            .remove(branch)
+            .map(|standing| standing.values().map(SemanticGroups::state_bytes).sum())
+            .unwrap_or(0);
+        Ok(query_bytes + group_bytes)
+    }
+
     /// Execute only through Loom's kill-switch, evidence, policy, simulation, idempotency, and
     /// receipt checks. The agent handle has no equivalent method.
     #[must_use]

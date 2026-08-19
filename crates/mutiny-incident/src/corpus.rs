@@ -37,15 +37,67 @@ pub struct CorpusAction {
     pub justified_by: Vec<String>,
 }
 
+/// One ordered corpus operation. M4 corpora contain only commits; the M5 forked variant
+/// interleaves the durable branch lifecycle with them, in the order the incident happened.
+#[derive(Clone, Debug)]
+pub enum CorpusOp {
+    Commit(CorpusCommit),
+    /// A durable fork: an ordinary commit on the parent's timeline, then hydration.
+    Fork {
+        session: String,
+        from: String,
+        child: String,
+    },
+    /// A durable rewind: recorded, then the branch's standing state is torn down.
+    Rewind {
+        session: String,
+        child: String,
+    },
+    /// A durable merge of the child's post-fork divergence into `into`, per Loom's law.
+    Merge {
+        session: String,
+        child: String,
+        into: String,
+    },
+}
+
 /// The parsed corpus.
 #[derive(Clone, Debug, Default)]
 pub struct Corpus {
     pub sessions: Vec<String>,
+    /// Transient (M3-style) forks performed at open, before any data. The M4 corpus uses these;
+    /// the M5 forked variant uses durable `forkc` operations in `ops` instead.
     pub forks: Vec<(String, String)>,
     pub commits: Vec<CorpusCommit>,
+    /// Every ordered operation, in corpus order. For an M4 corpus this is exactly the commits.
+    pub ops: Vec<CorpusOp>,
     pub actions: Vec<CorpusAction>,
     /// `system:record` → the (branch, table, key) rows the corpus declares downstream of it.
     pub downstream: BTreeMap<String, BTreeSet<(String, String, String)>>,
+}
+
+impl Corpus {
+    /// Keep only the commits the predicate accepts, in **both** views (the flat list and the
+    /// ordered ops). Oracle worlds are built this way; touching one view alone is the bug.
+    pub fn retain_commits(&mut self, keep: impl Fn(&CorpusCommit) -> bool) {
+        self.commits.retain(&keep);
+        self.ops.retain(|op| match op {
+            CorpusOp::Commit(commit) => keep(commit),
+            _ => true,
+        });
+    }
+
+    /// Apply a mutation to every commit, in both views.
+    pub fn map_commits(&mut self, mutate: impl Fn(&mut CorpusCommit)) {
+        for commit in &mut self.commits {
+            mutate(commit);
+        }
+        for op in &mut self.ops {
+            if let CorpusOp::Commit(commit) = op {
+                mutate(commit);
+            }
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -86,6 +138,10 @@ pub fn catalog() -> Result<BTreeMap<String, Schema>, String> {
             mutiny_taint::LEDGER_TABLE.to_owned(),
             TaintConfig::ledger_schema().map_err(|error| error.to_string())?,
         ),
+        (
+            mutiny_forks::FORKS_TABLE.to_owned(),
+            mutiny_forks::forks_schema().map_err(|error| error.to_string())?,
+        ),
     ]))
 }
 
@@ -94,6 +150,7 @@ pub fn catalog() -> Result<BTreeMap<String, Schema>, String> {
 pub fn plane_of(table: &str) -> &'static str {
     match table {
         CLAIMS => "memory",
+        mutiny_forks::FORKS_TABLE => "trust",
         _ => "events",
     }
 }
@@ -204,7 +261,7 @@ pub fn parse(text: &str) -> Result<Corpus, CorpusError> {
                         }
                         other => return Err(fail(format!("unknown corpus table {other:?}"))),
                     };
-                corpus.commits.push(CorpusCommit {
+                let commit = CorpusCommit {
                     session: session.to_owned(),
                     branch: branch.to_owned(),
                     actor: actor.to_owned(),
@@ -212,6 +269,37 @@ pub fn parse(text: &str) -> Result<Corpus, CorpusError> {
                     sources,
                     key: key.to_owned(),
                     row,
+                };
+                corpus.commits.push(commit.clone());
+                corpus.ops.push(CorpusOp::Commit(commit));
+            }
+            Some("forkc") => {
+                let [_, session, from, child] = fields[..] else {
+                    return Err(fail("forkc is session|from|child".to_owned()));
+                };
+                corpus.ops.push(CorpusOp::Fork {
+                    session: session.to_owned(),
+                    from: from.to_owned(),
+                    child: child.to_owned(),
+                });
+            }
+            Some("rewindc") => {
+                let [_, session, child] = fields[..] else {
+                    return Err(fail("rewindc is session|child".to_owned()));
+                };
+                corpus.ops.push(CorpusOp::Rewind {
+                    session: session.to_owned(),
+                    child: child.to_owned(),
+                });
+            }
+            Some("mergec") => {
+                let [_, session, child, into] = fields[..] else {
+                    return Err(fail("mergec is session|child|into".to_owned()));
+                };
+                corpus.ops.push(CorpusOp::Merge {
+                    session: session.to_owned(),
+                    child: child.to_owned(),
+                    into: into.to_owned(),
                 });
             }
             Some("action") => {

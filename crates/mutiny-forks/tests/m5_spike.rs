@@ -104,17 +104,20 @@ impl<'a> PageState<'a> {
                 let old_score = f32::from_bits(u32::from_be_bytes(
                     bytes[0..4].try_into().expect("stored score"),
                 ));
-                let old_cost =
-                    i64::from_be_bytes(bytes[4..12].try_into().expect("stored cost"));
-                tree.remove(&rank_key(old_score, name)).expect("rank retract");
+                let old_cost = i64::from_be_bytes(bytes[4..12].try_into().expect("stored cost"));
+                tree.remove(&rank_key(old_score, name))
+                    .expect("rank retract");
                 add_to_rollup(&mut tree, -old_cost);
             }
             let mut blob = score.to_bits().to_be_bytes().to_vec();
             blob.extend_from_slice(&cost.to_be_bytes());
             tree.insert(row_key(name), Record::Value(Value::Blob(blob)))
                 .expect("row insert");
-            tree.insert(rank_key(*score, name), Record::Value(Value::Blob(Vec::new())))
-                .expect("rank insert");
+            tree.insert(
+                rank_key(*score, name),
+                Record::Value(Value::Blob(Vec::new())),
+            )
+            .expect("rank insert");
             add_to_rollup(&mut tree, *cost);
         }
         let mut txn = store.begin().expect("txn");
@@ -283,23 +286,32 @@ fn the_spike_measures_the_cow_layout_against_md5_criteria() {
     // Child-only writes first: the parent must not move.
     let mut child_lcg = Lcg(5);
     for index in 0..DIVERGENT_UPDATES {
-        let update = vec![(format!("child-{index:06}"), child_lcg.score(), child_lcg.cost())];
+        let update = vec![(
+            format!("child-{index:06}"),
+            child_lcg.score(),
+            child_lcg.cost(),
+        )];
         child.apply(&update);
         child_model.apply(&update);
     }
-    let parent_idle_ok =
-        large.top_k() == parent_before.0 && large.rollup() == parent_before.1;
+    let parent_idle_ok = large.top_k() == parent_before.0 && large.rollup() == parent_before.1;
 
     // Then interleaved divergence on both sides, checked against the models at every step.
     let mut parent_lcg = Lcg(6);
     let mut c3_pass = parent_idle_ok;
     for index in 0..DIVERGENT_UPDATES {
-        let parent_update =
-            vec![(format!("parent-{index:06}"), parent_lcg.score(), parent_lcg.cost())];
+        let parent_update = vec![(
+            format!("parent-{index:06}"),
+            parent_lcg.score(),
+            parent_lcg.cost(),
+        )];
         large.apply(&parent_update);
         large_model.apply(&parent_update);
-        let child_update =
-            vec![(format!("late-{index:06}"), child_lcg.score(), child_lcg.cost())];
+        let child_update = vec![(
+            format!("late-{index:06}"),
+            child_lcg.score(),
+            child_lcg.cost(),
+        )];
         child.apply(&child_update);
         child_model.apply(&child_update);
 

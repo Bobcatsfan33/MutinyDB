@@ -1,0 +1,12 @@
+{
+  "measurement": "M5 fork cost — MD-5 Option B hydration clone (top-k + groups, 16-dim vectors)",
+  "claim": "fork cost is O(state); O(1) fork of live answers is post-v1 (MD-5)",
+  "samples": [
+    { "rows": 1000, "state_bytes": 802000, "fork_median_ns": 771917, "ns_per_row": 771.9 },
+    { "rows": 10000, "state_bytes": 8020000, "fork_median_ns": 4360417, "ns_per_row": 436.0 },
+    { "rows": 50000, "state_bytes": 40100000, "fork_median_ns": 24074833, "ns_per_row": 481.5 }
+  ],
+  "worst_honest_ns_per_row": 771.9,
+  "forks_per_size": 9,
+  "machine": "darwin-arm64 dev host, unloaded, cargo test (debug)"
+}

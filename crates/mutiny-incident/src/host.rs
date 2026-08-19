@@ -9,17 +9,22 @@
 //! and ledger epochs are engine-native, so the strict epoch=commit bijection holds for the ingest
 //! phase and this host refuses storage commits after a taint rather than mislabeling them.
 
-use crate::corpus::{self, Corpus, CorpusAction, CorpusCommit, CLAIMS, TELEMETRY, TENANT};
+use crate::corpus::{
+    self, Corpus, CorpusAction, CorpusCommit, CorpusOp, CLAIMS, TELEMETRY, TENANT,
+};
 use loom_action::{ActionRecord, Connector, ConnectorOutcome};
 use loom_branch::{CapabilityToken, Loom, MAIN};
 use loom_core::{
     ActorId, BranchId, Claim, ClaimId, ClaimStatus, Confidence, ExecutedAction, Interval, Method,
     SessionId, SourceRef, TenantId, Timestamp, TrustClass, WriteEnvelope,
 };
-use loom_policy::{Effect, Match, PolicyRule, PolicySet, PURPOSE_AUTHORIZE};
+use loom_policy::{Effect, Match, PolicyRule, PolicySet, Request, PURPOSE_AUTHORIZE};
 use mutiny_bridge::{
     commit_with_capture, prepared_batches, recover_pending_captures, CapturedChange, CapturedTable,
     CommitCapture, CommitDraft, EnvelopeAuthority, EnvelopeId,
+};
+use mutiny_forks::{
+    lineage_source, merge_marker_source, ForkEvent, ForkKind, Lineage, FORKS_TABLE,
 };
 use mutiny_semantic::{
     ScalarColumns, ScalarPredicate, SemanticDelta, SemanticGroupPlan, SemanticGroups,
@@ -94,6 +99,10 @@ pub enum HostError {
     Semantic(String),
     #[error("corpus: {0}")]
     Corpus(String),
+    #[error(transparent)]
+    Fork(#[from] mutiny_forks::ForkError),
+    #[error("the merge was refused, all-or-nothing, before any write: {0}")]
+    MergeRefused(String),
     #[error("the composed host is inconsistent: {0}")]
     Composition(String),
 }
@@ -139,15 +148,29 @@ impl Connector for SuspendConnector {
     }
 }
 
+/// One candidate row for a merge: (epoch it landed at, its key, and its table/row/sources).
+type MergeCandidate = (u64, String, (String, Row, Vec<SourceRef>));
+
+/// The action every merged standing write is re-evaluated as, at merge time (Loom AT-016,
+/// composed): a merge is a new write on the target, judged against policy as it is *now*.
+pub const MERGE_ACTION: &str = "standing.merge";
+
 fn policy() -> PolicySet {
     PolicySet::new(
-        "m4-policy-v1",
+        "m5-policy-v1",
         vec![
             PolicyRule {
                 actor: Match::Any,
                 label: Match::Is(TrustClass::Untrusted),
                 purpose: Match::Is(PURPOSE_AUTHORIZE.to_owned()),
                 action: Match::Is("identity.suspend_account".to_owned()),
+                effect: Effect::Deny,
+            },
+            PolicyRule {
+                actor: Match::Any,
+                label: Match::Is(TrustClass::Untrusted),
+                purpose: Match::Is(PURPOSE_AUTHORIZE.to_owned()),
+                action: Match::Is(MERGE_ACTION.to_owned()),
                 effect: Effect::Deny,
             },
             PolicyRule {
@@ -182,9 +205,13 @@ pub struct Host {
     pub standing: BTreeMap<&'static str, u64>,
     /// The storage commit clock (dense, per MD-2 R1). Frozen once a taint has run.
     pub commit_seq: u64,
+    /// (parent state bytes hydrated, nanoseconds) per durable fork — the O(state) evidence.
+    pub fork_samples: Vec<(usize, u128)>,
     tainted: bool,
     records: Vec<ActionRecord>,
     branches: Vec<String>,
+    /// Live mirror of the durable `mutiny_forks` relation, in commit order. Rebuilt by replay.
+    lineage_events: Vec<ForkEvent>,
 }
 
 /// The embedding space every M4 semantic operator is pinned to.
@@ -314,22 +341,295 @@ impl Host {
             tokens,
             standing,
             commit_seq: 0,
+            fork_samples: Vec::new(),
             tainted: false,
             records: Vec::new(),
             branches,
+            lineage_events: Vec::new(),
         })
     }
 
-    /// Build the full corpus world: every commit through the real front door, then the action.
+    /// Build the full corpus world: every ordered operation through the real front door — commits,
+    /// durable forks, merges, rewinds — then the actions.
     pub fn build(paths: &HostPaths, corpus: &Corpus) -> Result<Host, HostError> {
         let mut host = Host::open(paths, corpus)?;
-        for commit in &corpus.commits {
-            host.ingest_commit(commit)?;
+        for op in &corpus.ops {
+            host.apply_op(op)?;
         }
         for action in &corpus.actions {
             host.execute_action(action)?;
         }
         Ok(host)
+    }
+
+    /// Apply one ordered corpus operation. Lifecycle operations use the session's name as the
+    /// acting identity on their bookkeeping envelopes.
+    pub fn apply_op(&mut self, op: &CorpusOp) -> Result<(), HostError> {
+        match op {
+            CorpusOp::Commit(commit) => self.ingest_commit(commit),
+            CorpusOp::Fork {
+                session,
+                from,
+                child,
+            } => self.fork_durable(session, session, from, child),
+            CorpusOp::Rewind { session, child } => {
+                self.rewind_durable(session, session, child).map(|_| ())
+            }
+            CorpusOp::Merge {
+                session,
+                child,
+                into,
+            } => self
+                .merge_durable(
+                    session,
+                    session,
+                    child,
+                    into,
+                    TrustClass::VerifiedSystem,
+                    None,
+                )
+                .map(|_| ()),
+        }
+    }
+
+    /// The live lineage, folded from the mirror of the durable relation.
+    pub fn lineage(&self) -> Result<Lineage, HostError> {
+        Lineage::from_events(self.lineage_events.iter().cloned()).map_err(HostError::from)
+    }
+
+    /// **Durable fork** (M5, MD-5 Option B): one ordinary commit on the parent's timeline records
+    /// the fork, then the child's standing operators are hydrated from the parent's live state —
+    /// O(state), measured into `fork_samples`, never claimed O(1).
+    pub fn fork_durable(
+        &mut self,
+        session: &str,
+        actor: &str,
+        from: &str,
+        child: &str,
+    ) -> Result<(), HostError> {
+        let lineage = self.lineage()?;
+        if lineage.fork_of(child).is_some() {
+            if self.tokens.contains_key(child) {
+                return Ok(());
+            }
+            return Err(HostError::Composition(format!(
+                "fork record for {child:?} exists without live standing state; reopen the host \
+                 so replay rebuilds it"
+            )));
+        }
+        let event = ForkEvent {
+            child: child.to_owned(),
+            parent: from.to_owned(),
+            at_epoch: self.commit_seq + 1,
+            kind: ForkKind::Fork,
+        };
+        let commit = CorpusCommit {
+            session: session.to_owned(),
+            branch: from.to_owned(),
+            actor: actor.to_owned(),
+            table: FORKS_TABLE.to_owned(),
+            sources: vec![lineage_source(from)],
+            key: child.to_owned(),
+            row: event.to_row(),
+        };
+        self.ingest_commit(&commit)?;
+        self.hydrate_fork(&event)
+    }
+
+    /// The hydration half of a fork: Loom branch + standing-state clone, measured. Shared by the
+    /// live path and replay so a recovered fork is built by exactly the code that built it live.
+    fn hydrate_fork(&mut self, event: &ForkEvent) -> Result<(), HostError> {
+        let from_token = self.tokens.get(&event.parent).ok_or_else(|| {
+            HostError::Composition(format!("fork from unknown branch {:?}", event.parent))
+        })?;
+        let parent_bytes = self
+            .operator
+            .branch_state_bytes(&BranchId::new(event.parent.as_str()))?;
+        let started = std::time::Instant::now();
+        let (branch, token) = self.agent.branch(
+            from_token,
+            &BranchId::new(event.parent.as_str()),
+            &event.child,
+        )?;
+        self.fork_samples
+            .push((parent_bytes, started.elapsed().as_nanos()));
+        if branch.as_str() != event.child {
+            return Err(HostError::Composition(format!(
+                "fork of {:?} created branch {:?}",
+                event.child,
+                branch.as_str()
+            )));
+        }
+        self.tokens.insert(event.child.clone(), token);
+        self.branches.push(event.child.clone());
+        self.branches.sort();
+        self.lineage_events.push(event.clone());
+        Ok(())
+    }
+
+    /// **Durable rewind**: recorded first, then the branch's standing state is torn down and its
+    /// bytes return to the mount's baseline. Loom's branch and every committed row remain —
+    /// auditable, never destroyed. Returns the standing-state bytes freed.
+    pub fn rewind_durable(
+        &mut self,
+        session: &str,
+        actor: &str,
+        child: &str,
+    ) -> Result<usize, HostError> {
+        let lineage = self.lineage()?;
+        let Some((parent, _)) = lineage.fork_of(child) else {
+            return Err(HostError::Fork(mutiny_forks::ForkError::UnknownBranch {
+                branch: child.to_owned(),
+            }));
+        };
+        let parent = parent.to_owned();
+        if lineage.rewound_at(child).is_none() {
+            let event = ForkEvent {
+                child: child.to_owned(),
+                parent: parent.clone(),
+                at_epoch: self.commit_seq + 1,
+                kind: ForkKind::Rewind,
+            };
+            let commit = CorpusCommit {
+                session: session.to_owned(),
+                branch: child.to_owned(),
+                actor: actor.to_owned(),
+                table: FORKS_TABLE.to_owned(),
+                sources: vec![lineage_source(&parent)],
+                key: format!("{child}:rewind"),
+                row: event.to_row(),
+            };
+            self.ingest_commit(&commit)?;
+            self.lineage_events.push(event);
+        }
+        let freed = self.operator.rewind_branch(&BranchId::new(child))?;
+        self.tokens.remove(child);
+        self.branches.retain(|branch| branch != child);
+        Ok(freed)
+    }
+
+    /// **Durable merge of the child's post-fork divergence into `into`, per Loom's law**: new
+    /// commits on the target through the front door; every merged write re-evaluated against
+    /// policy *now*, all-or-nothing; each merged row keeps its **own** original sources (Loom
+    /// I-2) plus the durable merge marker that makes a repeated or crash-resumed merge a no-op —
+    /// the +6-not-+3 double-count class dies on that marker. `limit` is the crash-injection hook:
+    /// `Some(k)` commits at most k rows and then fails as an interrupted process would.
+    pub fn merge_durable(
+        &mut self,
+        session: &str,
+        actor: &str,
+        child: &str,
+        into: &str,
+        label: TrustClass,
+        limit: Option<usize>,
+    ) -> Result<usize, HostError> {
+        let lineage = self.lineage()?;
+        // Candidate rows: the child's commits, straight from the durable manifest history.
+        let head = self.store.head();
+        let captures = recover_pending_captures(&self.store, head, 0)?;
+        let mut candidates: Vec<MergeCandidate> = Vec::new();
+        for capture in &captures {
+            if capture.branch.as_str() != child {
+                continue;
+            }
+            for (table, captured) in &capture.tables {
+                if table == FORKS_TABLE {
+                    continue;
+                }
+                for change in &captured.changes {
+                    let key = String::from_utf8(change.primary_key.clone()).map_err(|_| {
+                        HostError::Composition(format!(
+                            "merge candidate in {table:?} has a non-utf8 key"
+                        ))
+                    })?;
+                    candidates.push((
+                        capture.commit_seq,
+                        key,
+                        (
+                            table.clone(),
+                            change.row.clone(),
+                            capture.envelope.derived_from.clone(),
+                        ),
+                    ));
+                }
+            }
+        }
+        candidates.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+
+        // What a previous (possibly crashed) merge already landed: the durable marker.
+        let marker = merge_marker_source(child);
+        let sql = format!(
+            "SELECT {d}.row_key AS row_key FROM {d} WHERE {d}.source_system = '{}' AND \
+             {d}.source_record = '{}'",
+            marker.system,
+            marker.record_id,
+            d = mutiny_bridge::DERIVATION_TABLE
+        );
+        let already: BTreeSet<String> = self
+            .table_rows(&sql)?
+            .into_iter()
+            .filter_map(|row| match row.get(0) {
+                Some(Value::Str(hex)) => decode_hex_utf8(hex),
+                _ => None,
+            })
+            .collect();
+
+        let plan = lineage.merge_divergence(child, &candidates, &already)?;
+
+        // Policy, re-run at merge time, all-or-nothing: if any write is forbidden, nothing lands.
+        for (_, key, (table, _, _)) in &plan {
+            let decision = self.agent.decide(&Request {
+                actor: actor.to_owned(),
+                label,
+                purpose: PURPOSE_AUTHORIZE.to_owned(),
+                action: MERGE_ACTION.to_owned(),
+            });
+            if decision.decision != loom_policy::Decision::Allow {
+                return Err(HostError::MergeRefused(format!(
+                    "policy denies {MERGE_ACTION} for {table}/{key} under label {label:?}; \
+                     no write was made"
+                )));
+            }
+        }
+
+        let mut merged = 0usize;
+        for (index, (_, key, (table, row, sources))) in plan.iter().enumerate() {
+            if let Some(bound) = limit {
+                if index >= bound {
+                    return Err(HostError::Composition(
+                        "merge interrupted by the injected crash hook".to_owned(),
+                    ));
+                }
+            }
+            let mut values = row.values().to_vec();
+            let branch_column = 1;
+            values[branch_column] = Value::Str(into.to_owned());
+            let mut merged_sources = sources.clone();
+            merged_sources.push(marker.clone());
+            let commit = CorpusCommit {
+                session: session.to_owned(),
+                branch: into.to_owned(),
+                actor: actor.to_owned(),
+                table: table.clone(),
+                sources: merged_sources,
+                key: key.clone(),
+                row: Row::new(values),
+            };
+            self.ingest_commit(&commit)?;
+            merged += 1;
+        }
+        Ok(merged)
+    }
+
+    /// Ad-hoc typed read of one query's current answer, through the frame door (the taint core's
+    /// register/read/deregister lifecycle).
+    fn table_rows(&mut self, sql: &str) -> Result<Vec<Row>, HostError> {
+        let handle = self.engine.register(sql, Admission::bounded())?;
+        let frames = self.engine.read_frames(handle);
+        let deregistered = self.engine.deregister(handle);
+        let bytes = frames?;
+        deregistered?;
+        rows_from_frames(&bytes)
     }
 
     /// One corpus write: one substrate commit with its bounded capture, one bridge translation,
@@ -521,6 +821,7 @@ impl Host {
         let config = corpus::taint_config();
         let mut healer = TrustHealer {
             operator: &self.operator,
+            lineage: self.lineage()?,
         };
         let outcome = mutiny_taint::taint_with_faults(
             &mut self.engine,
@@ -542,46 +843,79 @@ impl Host {
     pub fn reopen(paths: &HostPaths, corpus: &Corpus) -> Result<Host, HostError> {
         let mut host = Host::open(paths, corpus)?;
 
-        // Storage commits the compute plane has not sealed yet: manifest history is the queue.
+        // The manifest capture history is the durable log; replay it oldest-first through the fork
+        // lineage. A fork record clones the parent's replayed state at exactly the point the fork
+        // happened — inheritance falls out of the replay order — and a rewind record tears the
+        // branch's state down again. Storage commits the compute plane has not sealed complete
+        // through the same admission path they would have taken live.
         let head = host.store.head();
-        let sealed = host.engine.epoch();
-        // Re-register every corpus envelope: recovery re-admits the same envelopes it admitted.
-        for commit in &corpus.commits {
-            let envelope = WriteEnvelope::new(
-                ActorId::new(commit.actor.as_str()),
-                SessionId::new(commit.session.as_str()),
-                BranchId::new(commit.branch.as_str()),
-                format!("record {} {}", commit.table, commit.key),
-            )
-            .derived_from(commit.sources.iter().cloned());
-            host.authority.register(EnvelopeId::of(&envelope));
-        }
-        let pending = recover_pending_captures(&host.store, head, sealed)?;
-        for capture in &pending {
+        let captures = recover_pending_captures(&host.store, head, 0)?;
+        for capture in &captures {
+            // The capture itself carries the envelope that was durably admitted at commit time;
+            // recovery re-admits exactly that record.
+            host.authority.register(EnvelopeId::of(&capture.envelope));
             host.apply_capture(capture)?;
+            for (table, captured) in &capture.tables {
+                if table == FORKS_TABLE {
+                    for change in &captured.changes {
+                        let event = ForkEvent::from_row(&change.row)?;
+                        match event.kind {
+                            ForkKind::Fork => host.hydrate_fork(&event)?,
+                            ForkKind::Rewind => {
+                                host.operator
+                                    .rewind_branch(&BranchId::new(event.child.as_str()))?;
+                                host.tokens.remove(&event.child);
+                                host.branches.retain(|branch| branch != &event.child);
+                                host.lineage_events.push(event);
+                            }
+                        }
+                    }
+                } else if table == TELEMETRY {
+                    let branch = capture.branch.as_str().to_owned();
+                    for change in &captured.changes {
+                        let delta = host.telemetry_delta(&change.row, change.weight)?;
+                        host.apply_semantic(&branch, vec![delta])?;
+                    }
+                }
+            }
         }
         host.commit_seq = match mutiny_bridge::recover_capture(&host.store, head) {
             Ok(capture) => capture.commit_seq,
             Err(_) => 0,
         };
 
-        // Rebuild the volatile plane from the compute plane's current telemetry, branch by branch.
-        let telemetry = host.standing_rows("telemetry_current")?;
-        let mut by_branch: BTreeMap<String, Vec<SemanticDelta>> = BTreeMap::new();
-        for row in telemetry {
-            let branch = match row.get(1) {
-                Some(Value::Str(branch)) => branch.clone(),
-                other => {
-                    return Err(HostError::Composition(format!(
-                        "telemetry branch column is {other:?}"
-                    )))
-                }
-            };
-            let delta = host.telemetry_delta(&row, 1)?;
-            by_branch.entry(branch).or_default().push(delta);
+        // Then the heals the taint ledger recorded: engine-native epochs that never appear in the
+        // manifest history. Each cascades through the lineage exactly as the live heal does.
+        let ledger_sql = format!(
+            "SELECT {t}.branch AS branch, {t}.table_name AS table_name, {t}.row_key AS row_key \
+             FROM {t}",
+            t = mutiny_taint::LEDGER_TABLE
+        );
+        let healed_rows = host.table_rows(&ledger_sql)?;
+        if !healed_rows.is_empty() {
+            host.tainted = true;
         }
-        for (branch, deltas) in by_branch {
-            host.apply_semantic(&branch, deltas)?;
+        let lineage = host.lineage()?;
+        let mut healer = TrustHealer {
+            operator: &host.operator,
+            lineage,
+        };
+        for row in healed_rows {
+            let (Some(Value::Str(branch)), Some(Value::Str(table)), Some(Value::Str(row_key))) =
+                (row.get(0), row.get(1), row.get(2))
+            else {
+                return Err(HostError::Composition(
+                    "malformed taint ledger row".to_owned(),
+                ));
+            };
+            let Some(key) = decode_hex_utf8(row_key) else {
+                return Err(HostError::Composition(format!(
+                    "taint ledger row key {row_key:?} does not decode"
+                )));
+            };
+            healer
+                .heal(branch, table, &[key])
+                .map_err(HostError::Composition)?;
         }
 
         // The world's actions happened; the rebuilt gateway re-derives the same records.
@@ -598,19 +932,7 @@ impl Host {
             .get(name)
             .ok_or_else(|| HostError::Composition(format!("unknown standing query {name:?}")))?;
         let bytes = self.engine.read_frames(handle)?;
-        let (record, _) = read_framed(&bytes, 0)
-            .map_err(|error| HostError::Composition(error.to_string()))?
-            .ok_or_else(|| HostError::Composition("torn answer frame".to_owned()))?;
-        let Record::Append { entries, .. } = record else {
-            return Err(HostError::Composition(
-                "the answer frame is not an append record".to_owned(),
-            ));
-        };
-        Ok(entries
-            .into_iter()
-            .filter(|(_, weight)| *weight > 0)
-            .map(|(row, _)| row)
-            .collect())
+        rows_from_frames(&bytes)
     }
 
     fn telemetry_delta(&self, row: &Row, weight: i64) -> Result<SemanticDelta, HostError> {
@@ -714,8 +1036,15 @@ impl Host {
 
 /// MD-1 R2's trait inversion: the taint core names the heal it needs, this host implements it
 /// over the operator's mounted semantic plane. Only telemetry feeds that plane in this corpus.
+///
+/// M5 extends the heal through the fork lineage: a descendant's standing state was hydrated from
+/// an ancestor, so healing the writing branch also heals every **active** descendant.
+/// Retract-by-key skips branches that never inherited the row or already diverged away from it,
+/// which is what keeps the cascade idempotent. With no recorded lineage (the M4 corpus) this is
+/// exactly the M4 behavior.
 pub struct TrustHealer<'a> {
     pub operator: &'a OperatorTrustPlane,
+    pub lineage: Lineage,
 }
 
 impl SemanticHealer for TrustHealer<'_> {
@@ -726,8 +1055,44 @@ impl SemanticHealer for TrustHealer<'_> {
         if table != TELEMETRY {
             return Ok(0);
         }
-        self.operator
+        let mut healed = self
+            .operator
             .heal_semantic(&BranchId::new(branch), keys)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        for descendant in self.lineage.active_descendants(branch) {
+            healed += self
+                .operator
+                .heal_semantic(&BranchId::new(descendant.as_str()), keys)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(healed)
     }
+}
+
+/// Decode one answer frame into its positive rows.
+fn rows_from_frames(bytes: &[u8]) -> Result<Vec<Row>, HostError> {
+    let (record, _) = read_framed(bytes, 0)
+        .map_err(|error| HostError::Composition(error.to_string()))?
+        .ok_or_else(|| HostError::Composition("torn answer frame".to_owned()))?;
+    let Record::Append { entries, .. } = record else {
+        return Err(HostError::Composition(
+            "the answer frame is not an append record".to_owned(),
+        ));
+    };
+    Ok(entries
+        .into_iter()
+        .filter(|(_, weight)| *weight > 0)
+        .map(|(row, _)| row)
+        .collect())
+}
+
+fn decode_hex_utf8(hex: &str) -> Option<String> {
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok())
+        .collect();
+    String::from_utf8(bytes?).ok()
 }
