@@ -27,6 +27,31 @@ ALLOWED_COMPONENT_EDGES = {
         "schweep-zset",
     },
     "mutiny-trust": {"loom-action", "loom-branch", "loom-core", "loom-policy"},
+    # M4: the taint core is a trust-plane feature over the compute plane (MD-1 R1 trust→compute).
+    # The volatile semantic heal crosses through a trait the host implements, so the core needs
+    # neither mutiny-trust nor mutiny-semantic.
+    "mutiny-taint": {
+        "loom-core",
+        "schweep-log",
+        "schweep-memo",
+        "schweep-server",
+        "schweep-zset",
+    },
+    # M4: the dev-only incident host composes every plane the supported M6 binary eventually
+    # will; it is not that binary and produces no release artifact.
+    "mutiny-incident": {
+        "loom-action",
+        "loom-branch",
+        "loom-core",
+        "loom-policy",
+        "prism-types",
+        "schweep-log",
+        "schweep-memo",
+        "schweep-server",
+        "schweep-zset",
+        "substrate-pager",
+        "substrate-wal",
+    },
 }
 COMPONENT_ROOT = ROOT / "components"
 

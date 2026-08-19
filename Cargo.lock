@@ -91,16 +91,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-ipc"
+version = "59.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "149437b14371f5b9ec60f5ddc751483ae99d7a7072653c0075e5e469156eea7b"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select",
+ "flatbuffers",
+]
+
+[[package]]
 name = "arrow-schema"
 version = "59.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6fed2ca0d1eade57e811cbe73b98ad50cc08a1183e13b2d2aa43a7df593f40e"
 
 [[package]]
+name = "arrow-select"
+version = "59.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "466b19cf75130b891dc1b23a84b343c714c62c64c9c62e365c76aa0ff90a53fb"
+dependencies = [
+ "ahash",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "num-traits",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64ct"
@@ -413,6 +447,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
+name = "flatbuffers"
+version = "25.12.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35f6839d7b3b98adde531effaf34f0c2badc6f4735d26fe74709d8e513a96ef3"
+dependencies = [
+ "bitflags",
+ "rustc_version",
+]
+
+[[package]]
 name = "foreign-types"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -682,6 +726,30 @@ name = "mutiny-charter"
 version = "0.0.0"
 
 [[package]]
+name = "mutiny-incident"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "loom-action",
+ "loom-branch",
+ "loom-core",
+ "loom-policy",
+ "mutiny-bridge",
+ "mutiny-semantic",
+ "mutiny-taint",
+ "mutiny-trust",
+ "prism-types",
+ "schweep-log",
+ "schweep-memo",
+ "schweep-server",
+ "schweep-zset",
+ "substrate-pager",
+ "substrate-wal",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "mutiny-semantic"
 version = "0.1.0"
 dependencies = [
@@ -692,6 +760,20 @@ dependencies = [
  "prism-types",
  "schweep-zset",
  "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "mutiny-taint"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "loom-core",
+ "mutiny-bridge",
+ "schweep-log",
+ "schweep-memo",
+ "schweep-server",
+ "schweep-zset",
  "thiserror",
 ]
 
@@ -815,6 +897,31 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "parquet"
+version = "59.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7065842956a20c2a536924ce8e4d9955f7422451511b9eb7500d7bfe5077e59c"
+dependencies = [
+ "ahash",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-ipc",
+ "arrow-schema",
+ "arrow-select",
+ "base64",
+ "bytes",
+ "chrono",
+ "half",
+ "hashbrown",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "seq-macro",
+ "twox-hash",
 ]
 
 [[package]]
@@ -1036,11 +1143,100 @@ dependencies = [
 ]
 
 [[package]]
+name = "schweep-batch"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "parquet",
+ "schweep-circuit",
+ "schweep-log",
+ "schweep-memo",
+ "schweep-ops",
+ "schweep-plan",
+ "schweep-sql",
+ "schweep-state",
+ "schweep-zset",
+ "thiserror",
+]
+
+[[package]]
+name = "schweep-circuit"
+version = "0.1.0"
+dependencies = [
+ "schweep-log",
+ "schweep-ops",
+ "schweep-plan",
+ "schweep-state",
+ "schweep-zset",
+ "thiserror",
+]
+
+[[package]]
 name = "schweep-log"
 version = "0.1.0"
 dependencies = [
  "schweep-state",
  "schweep-zset",
+ "thiserror",
+]
+
+[[package]]
+name = "schweep-memo"
+version = "0.1.0"
+dependencies = [
+ "schweep-circuit",
+ "schweep-ops",
+ "schweep-plan",
+ "schweep-sql",
+ "schweep-state",
+ "schweep-zset",
+ "thiserror",
+]
+
+[[package]]
+name = "schweep-ops"
+version = "0.1.0"
+dependencies = [
+ "schweep-plan",
+ "schweep-state",
+ "schweep-zset",
+ "thiserror",
+]
+
+[[package]]
+name = "schweep-plan"
+version = "0.1.0"
+dependencies = [
+ "schweep-zset",
+ "thiserror",
+]
+
+[[package]]
+name = "schweep-server"
+version = "0.1.0"
+dependencies = [
+ "schweep-batch",
+ "schweep-circuit",
+ "schweep-log",
+ "schweep-memo",
+ "schweep-plan",
+ "schweep-sql",
+ "schweep-state",
+ "schweep-zset",
+ "thiserror",
+]
+
+[[package]]
+name = "schweep-sql"
+version = "0.1.0"
+dependencies = [
+ "schweep-circuit",
+ "schweep-ops",
+ "schweep-plan",
+ "schweep-state",
+ "schweep-zset",
+ "sqlparser",
  "thiserror",
 ]
 
@@ -1091,6 +1287,12 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+
+[[package]]
+name = "seq-macro"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bc711410fbe7399f390ca1c3b60ad0f53f80e95c5eb935e52268a0e2cd49acc"
 
 [[package]]
 name = "serde"
@@ -1175,6 +1377,15 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "sqlparser"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c6d1b651dc4edf07eead2a0c6c78016ce971bc2c10da5266861b13f25e7cec"
+dependencies = [
+ "log",
 ]
 
 [[package]]
@@ -1282,6 +1493,12 @@ checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
 dependencies = [
  "crunchy",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8464ec13c3691491391d9fce00f6416c9a48e46972f72d7865688be2080192c9"
 
 [[package]]
 name = "typenum"

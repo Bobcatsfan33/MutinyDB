@@ -294,6 +294,28 @@ impl SemanticTopK {
             key: record.key.clone(),
         }
     }
+
+    /// Retract currently-held records by key through the ordinary `-1` path (M4 taint heal).
+    ///
+    /// A key this operator does not hold is a skip, not an error: a resumed taint retracts the
+    /// same set twice and must be idempotent. Returns how many rows were actually retracted,
+    /// alongside the same answer deltas [`Self::apply_epoch`] would emit for them.
+    pub fn retract_keys<'k>(
+        &mut self,
+        keys: impl IntoIterator<Item = &'k str>,
+    ) -> Result<(usize, Vec<AnswerDelta>), SemanticError> {
+        let deltas = keys
+            .into_iter()
+            .filter_map(|key| self.rows.get(key))
+            .map(|record| SemanticDelta {
+                record: record.clone(),
+                weight: -1,
+            })
+            .collect::<Vec<_>>();
+        let healed = deltas.len();
+        let answer = self.apply_epoch(deltas)?;
+        Ok((healed, answer))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -716,6 +738,27 @@ impl SemanticGroups {
                 })
             })
             .collect()
+    }
+
+    /// Retract currently-held records by key through the ordinary `-1` path (M4 taint heal).
+    ///
+    /// Unknown keys are skipped for the same idempotency reason as
+    /// [`SemanticTopK::retract_keys`]. Returns how many rows were actually retracted.
+    pub fn retract_keys<'k>(
+        &mut self,
+        keys: impl IntoIterator<Item = &'k str>,
+    ) -> Result<usize, SemanticError> {
+        let deltas = keys
+            .into_iter()
+            .filter_map(|key| self.rows.get(key))
+            .map(|(record, _)| SemanticDelta {
+                record: record.clone(),
+                weight: -1,
+            })
+            .collect::<Vec<_>>();
+        let healed = deltas.len();
+        self.apply_epoch(deltas)?;
+        Ok(healed)
     }
 
     fn apply_one(&mut self, delta: SemanticDelta) -> Result<(), SemanticError> {

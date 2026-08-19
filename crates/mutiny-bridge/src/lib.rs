@@ -392,6 +392,18 @@ pub fn apply_commit(
     })
 }
 
+/// The exact admission batches for one capture — the same translation [`apply_commit`] performs,
+/// exposed so a composed host can drive them through the C9 engine door (M4). Validation, envelope
+/// admission, the physical/logical completeness audit, and canonical batch ordering are identical
+/// by construction: this returns the private preparation's output, it is not a second translation.
+pub fn prepared_batches(
+    capture: &CommitCapture,
+    authority: &impl EnvelopeAuthority,
+) -> Result<(EnvelopeId, Vec<Batch>), BridgeError> {
+    let prepared = prepare(capture, authority)?;
+    Ok((prepared.envelope, prepared.batches))
+}
+
 #[derive(Debug)]
 struct Prepared {
     envelope: EnvelopeId,

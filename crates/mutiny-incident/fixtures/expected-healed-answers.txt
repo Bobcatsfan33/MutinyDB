@@ -1,0 +1,54 @@
+== claims_current ==
+(claim_id: Utf8, branch: Utf8, subject: Utf8, asserts: Utf8, confidence_bp: Int64)
+("clm-3", "sess-b", "acct-7", "is_reconciled", 9000) => 1
+("clm-4", "sess-a", "vendor-9", "is_flagged", 8000) => 1
+
+== telemetry_current ==
+(event_id: Utf8, branch: Utf8, body: Utf8, cost_micros: Int64, error: Boolean, event_time: Int64)
+("evt-a2", "sess-a", "routine ledger reconciliation complete", 3000000, false, 1002) => 1
+("evt-a3", "sess-a", "urgent phishing wave claimed by second scraped page", 7000000, true, 1007) => 1
+("evt-b1", "sess-b", "urgent database security control alert", 11000000, true, 1003) => 1
+("evt-b2", "sess-b", "routine user authentication success", 1000000, false, 1004) => 1
+("evt-h2", "hyp-a", "routine backup verified", 1000000, false, 1006) => 1
+
+== derivation_current ==
+(tenant: Utf8, branch: Utf8, table_name: Utf8, row_key: Utf8, source_system: Utf8, source_record: Utf8, envelope: Utf8)
+("acme", "hyp-a", "telemetry", "6576742d6832", "ticket", "INC-42", "1f5af08790e6a9477babc01fdca7c8a562cf1be9ff54bd734263a8bc5d82012c") => 1
+("acme", "sess-a", "claims", "636c6d2d34", "web", "scraped-page-91", "d47c56e163190af574f1b12518a6dd234acf645ed179f931962e1e870fac5bec") => 1
+("acme", "sess-a", "telemetry", "6576742d6132", "erp", "ledger-9", "71decb520a0a1ccbe7af691c737478c4cd028b878ae6b3686f959ff360ba48bb") => 1
+("acme", "sess-a", "telemetry", "6576742d6133", "web", "scraped-page-91", "c7b2d8bee68a6014a535c5366dcbebf79a2b85434f1817081957fbc2549bc9aa") => 1
+("acme", "sess-b", "claims", "636c6d2d33", "erp", "ledger-9", "ead5cd1bfd088c9a7fc7645e41aba17a2fb3ba1c6785e9f0dd9417412863c0e4") => 1
+("acme", "sess-b", "telemetry", "6576742d6231", "erp", "ledger-9", "b3005d77a7aec2e473c662e086c5df6f8074f7534726ab3e72604d2b8c95add6") => 1
+("acme", "sess-b", "telemetry", "6576742d6232", "ticket", "INC-42", "a27ac1a4ad8f307be766f690f6f968fc03830c1ea72d4719caa584b1a784d7d6") => 1
+
+== cost_by_branch ==
+(branch: Utf8, total_cost: Int64, events: Int64)
+("hyp-a", 1000000, 1) => 1
+("sess-a", 10000000, 2) => 1
+("sess-b", 12000000, 2) => 1
+
+== claims_by_subject ==
+(subject: Utf8, supporting: Int64)
+("acct-7", 1) => 1
+("vendor-9", 1) => 1
+
+== semantic:hyp-a:incident-similar ==
+1. evt-h2 score=0.360041
+
+== groups:hyp-a:incident-groups ==
+group 1: count=1 avg_cost=1.000000 error_rate=0.000000 exemplar=evt-h2 members=evt-h2
+
+== semantic:sess-a:incident-similar ==
+1. evt-a3 score=0.370091
+2. evt-a2 score=0.160514
+
+== groups:sess-a:incident-groups ==
+group 0: count=2 avg_cost=5.000000 error_rate=0.500000 exemplar=evt-a3 members=evt-a2,evt-a3
+
+== semantic:sess-b:incident-similar ==
+1. evt-b1 score=0.578352
+2. evt-b2 score=0.264906
+
+== groups:sess-b:incident-groups ==
+group 0: count=2 avg_cost=6.000000 error_rate=0.500000 exemplar=evt-b2 members=evt-b1,evt-b2
+

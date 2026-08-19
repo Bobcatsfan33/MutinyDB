@@ -1,0 +1,11 @@
+RECALL REPORT — tainted source: web:scraped-page-91
+The reversible writes below are DONE, not proposed: the engine already healed them.
+
+2 write(s) downstream of this source were ALREADY HEALED by the engine:
+
+   • claims/636c6d2d34 [sess-a]
+       admitted by envelope d47c56e163190af574f1b12518a6dd234acf645ed179f931962e1e870fac5bec
+   • telemetry/6576742d6133 [sess-a]
+       admitted by envelope c7b2d8bee68a6014a535c5366dcbebf79a2b85434f1817081957fbc2549bc9aa
+
+Every standing answer has already corrected itself through the ordinary delta path. The irreversible section, if any, is yours.
