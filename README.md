@@ -118,23 +118,30 @@ blocked component marked admitted. That distinction is enforced, not editorial.
 - **M3 — the mounted trust plane.** Loom capability checks over branch-scoped standing results;
   branch-result isolation gated; the scripted MCP demo green; **all four Loom model oracles run
   unmodified** against the mounted configuration; the agent handle contains no action gateway.
+- **M4 — cross-circuit taint.** One `taint(S)` call resolves the poisoned source's downstream
+  through the `mutiny_derivation` standing relation (a query, not a DAG walk, transitive across
+  branches), retracts it through Schweep's C11 predicate-scoped `retract_source`, and memory
+  claims, analytical rollups, and branch-scoped semantic answers all correct themselves. The
+  frozen, checksummed incident corpus proves the healed world **byte-identical to an oracle that
+  never ingested the source**; the two-section RecallPlan leads with the executed action's
+  receipt; untainted branches and bystander tenants are untouched; taints compose; and the taint
+  path killed at every seam resumes without ever half-healing.
 
 Details: [`docs/M1-BRIDGE.md`](docs/M1-BRIDGE.md) · [`docs/M2-SEMANTIC.md`](docs/M2-SEMANTIC.md) ·
-[`docs/M3-TRUST.md`](docs/M3-TRUST.md)
+[`docs/M3-TRUST.md`](docs/M3-TRUST.md) · [`docs/M4-TAINT.md`](docs/M4-TAINT.md)
 
 ## Status — what is and is not ready
 
 **Not approved for production. Not a software release candidate.**
 
-Still open, named rather than implied: cross-circuit taint (M4), durable forked operator state
-(M5), a supported `mutinyd` binary (M6), fleet operation (M7), external assurance and production
-approval (M8). Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
+Still open, named rather than implied: durable forked operator state (M5), a supported `mutinyd`
+binary (M6), fleet operation (M7), external assurance and production approval (M8). Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
 PrismDB's admission requires a release and a live KMS receipt. The roadmap runs on exit gates, not
 dates.
 
 | Phase | M1 bridge | M2 semantic | M3 trust | M4 taint | M5 forks | M6 mutinyd | M7 fleet | M8 release |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | ✅ | ✅ | ✅ | ◎ | ◎ | ◎ | ◎ | ◎ |
+| | ✅ | ✅ | ✅ | ✅ | ◎ | ◎ | ◎ | ◎ |
 
 ## The evidence culture
 

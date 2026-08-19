@@ -1,0 +1,25 @@
+# M4 — taint-as-retraction (K-2), the trust-plane feature over the compute plane.
+#
+# The core deliberately does not depend on mutiny-trust or mutiny-semantic: the volatile semantic
+# heal crosses through the `SemanticHealer` trait (MD-1 R2's inversion), implemented by the host
+# that owns the mounted trust plane. mutiny-bridge is depended on for the derivation relation's
+# name and fixed schema — one definition, not two that drift.
+[package]
+name = "mutiny-taint"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Cross-circuit taint: source-scoped retraction through every MutinyDB plane."
+
+[dependencies]
+blake3.workspace = true
+loom-core.workspace = true
+mutiny-bridge = { path = "../mutiny-bridge" }
+schweep-log.workspace = true
+schweep-memo.workspace = true
+schweep-server.workspace = true
+schweep-zset.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

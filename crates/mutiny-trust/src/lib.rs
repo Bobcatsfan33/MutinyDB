@@ -8,7 +8,10 @@ use loom_action::{ActionGateway, ActionRecord, AgentStore, Connector, Proposal};
 use loom_branch::{CapabilityToken, Loom, SessionHandle, MAIN};
 use loom_core::{ActorId, BranchId, SessionId};
 use loom_policy::{Engine, PolicyDecision, PolicySet, Request};
-use mutiny_semantic::{AnswerDelta, SemanticDelta, SemanticError, SemanticHit, SemanticTopK};
+use mutiny_semantic::{
+    AnswerDelta, SemanticDelta, SemanticError, SemanticGroupSummary, SemanticGroups, SemanticHit,
+    SemanticTopK,
+};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
@@ -22,6 +25,10 @@ pub enum TrustError {
     QueryNotFound { branch: String, query: String },
     #[error("standing query {query:?} is already installed on branch {branch}")]
     QueryAlreadyExists { branch: String, query: String },
+    #[error("standing grouping {group:?} is not installed on branch {branch}")]
+    GroupNotFound { branch: String, group: String },
+    #[error("standing grouping {group:?} is already installed on branch {branch}")]
+    GroupAlreadyExists { branch: String, group: String },
     #[error("trust-plane state lock was poisoned")]
     StatePoisoned,
     #[error("action gateway lock was poisoned")]
@@ -29,10 +36,13 @@ pub enum TrustError {
 }
 
 type BranchQueries = BTreeMap<String, SemanticTopK>;
+type BranchGroups = BTreeMap<String, SemanticGroups>;
 
 struct MountedState {
     db: Arc<Loom>,
     queries: RwLock<BTreeMap<BranchId, BranchQueries>>,
+    // Lock discipline everywhere in this crate: `queries` before `groups`, never the reverse.
+    groups: RwLock<BTreeMap<BranchId, BranchGroups>>,
 }
 
 /// The capability-scoped surface safe to hand to an agent runtime. It has no execute method and
@@ -63,9 +73,12 @@ pub fn mount(
     }
     let mut queries = BTreeMap::new();
     queries.insert(BranchId::new(MAIN), BTreeMap::new());
+    let mut groups = BTreeMap::new();
+    groups.insert(BranchId::new(MAIN), BTreeMap::new());
     let state = Arc::new(MountedState {
         db,
         queries: RwLock::new(queries),
+        groups: RwLock::new(groups),
     });
     (
         AgentTrustPlane {
@@ -84,12 +97,22 @@ impl AgentTrustPlane {
             .queries
             .write()
             .map_err(|_| TrustError::StatePoisoned)?;
+        let mut groups = self
+            .state
+            .groups
+            .write()
+            .map_err(|_| TrustError::StatePoisoned)?;
         let (session, token) = self.state.db.open_session()?;
         let inherited = queries
             .get(&BranchId::new(MAIN))
             .cloned()
             .unwrap_or_default();
         queries.insert(session.branch.clone(), inherited);
+        let inherited_groups = groups
+            .get(&BranchId::new(MAIN))
+            .cloned()
+            .unwrap_or_default();
+        groups.insert(session.branch.clone(), inherited_groups);
         Ok((session, token))
     }
 
@@ -105,12 +128,22 @@ impl AgentTrustPlane {
             .queries
             .write()
             .map_err(|_| TrustError::StatePoisoned)?;
+        let mut groups = self
+            .state
+            .groups
+            .write()
+            .map_err(|_| TrustError::StatePoisoned)?;
         let (session, token) = self.state.db.open_session_named(session_id)?;
         let inherited = queries
             .get(&BranchId::new(MAIN))
             .cloned()
             .unwrap_or_default();
         queries.insert(session.branch.clone(), inherited);
+        let inherited_groups = groups
+            .get(&BranchId::new(MAIN))
+            .cloned()
+            .unwrap_or_default();
+        groups.insert(session.branch.clone(), inherited_groups);
         Ok((session, token))
     }
 
@@ -127,9 +160,16 @@ impl AgentTrustPlane {
             .queries
             .write()
             .map_err(|_| TrustError::StatePoisoned)?;
+        let mut groups = self
+            .state
+            .groups
+            .write()
+            .map_err(|_| TrustError::StatePoisoned)?;
         let inherited = queries.get(from).cloned().unwrap_or_default();
+        let inherited_groups = groups.get(from).cloned().unwrap_or_default();
         let (branch, token) = self.state.db.branch(token, from, name)?;
         queries.insert(branch.clone(), inherited);
+        groups.insert(branch.clone(), inherited_groups);
         Ok((branch, token))
     }
 
@@ -180,6 +220,53 @@ impl AgentTrustPlane {
             })
     }
 
+    /// Apply one grouping epoch only after Loom authorizes this exact branch capability.
+    pub fn apply_group_epoch(
+        &self,
+        token: &CapabilityToken,
+        branch: &BranchId,
+        group: &str,
+        deltas: impl IntoIterator<Item = SemanticDelta>,
+    ) -> Result<(), TrustError> {
+        self.state.db.authorize_read(token, branch)?;
+        let mut branches = self
+            .state
+            .groups
+            .write()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let state = branches
+            .get_mut(branch)
+            .and_then(|groups| groups.get_mut(group))
+            .ok_or_else(|| TrustError::GroupNotFound {
+                branch: branch.as_str().to_owned(),
+                group: group.to_owned(),
+            })?;
+        state.apply_epoch(deltas).map_err(TrustError::from)
+    }
+
+    /// Read a branch's grouping summaries through Loom's exact capability verifier.
+    pub fn group_summaries(
+        &self,
+        token: &CapabilityToken,
+        branch: &BranchId,
+        group: &str,
+    ) -> Result<Vec<SemanticGroupSummary>, TrustError> {
+        self.state.db.authorize_read(token, branch)?;
+        let branches = self
+            .state
+            .groups
+            .read()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        branches
+            .get(branch)
+            .and_then(|groups| groups.get(group))
+            .map(SemanticGroups::summaries)
+            .ok_or_else(|| TrustError::GroupNotFound {
+                branch: branch.as_str().to_owned(),
+                group: group.to_owned(),
+            })
+    }
+
     #[must_use]
     pub fn decide(&self, request: &Request) -> PolicyDecision {
         self.policy.decide(request)
@@ -218,6 +305,65 @@ impl OperatorTrustPlane {
                 })
             }
         }
+    }
+
+    /// Install a reviewed standing grouping on a branch. Sessions fork it from main thereafter.
+    pub fn install_groups(
+        &self,
+        branch: &BranchId,
+        group: impl Into<String>,
+        standing: SemanticGroups,
+    ) -> Result<(), TrustError> {
+        let group = group.into();
+        let mut branches = self
+            .state
+            .groups
+            .write()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let groups = branches.entry(branch.clone()).or_default();
+        match groups.entry(group.clone()) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(standing);
+                Ok(())
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                Err(TrustError::GroupAlreadyExists {
+                    branch: branch.as_str().to_owned(),
+                    group,
+                })
+            }
+        }
+    }
+
+    /// Retract the named record keys from every standing semantic operator on exactly this branch
+    /// (M4 taint heal). An operator power beside [`Self::install_standing`], deliberately absent
+    /// from the agent surface; sibling branches are untouched by construction, so M3's isolation
+    /// gate extends rather than weakens. Keys an operator does not hold are skipped — a resumed
+    /// taint heals idempotently. Returns the number of (operator, row) retractions performed.
+    pub fn heal_semantic(&self, branch: &BranchId, keys: &[String]) -> Result<usize, TrustError> {
+        let mut queries = self
+            .state
+            .queries
+            .write()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let mut groups = self
+            .state
+            .groups
+            .write()
+            .map_err(|_| TrustError::StatePoisoned)?;
+        let mut healed = 0;
+        if let Some(branch_queries) = queries.get_mut(branch) {
+            for standing in branch_queries.values_mut() {
+                let (count, _) = standing.retract_keys(keys.iter().map(String::as_str))?;
+                healed += count;
+            }
+        }
+        if let Some(branch_groups) = groups.get_mut(branch) {
+            for standing in branch_groups.values_mut() {
+                healed += standing.retract_keys(keys.iter().map(String::as_str))?;
+            }
+        }
+        Ok(healed)
     }
 
     /// Execute only through Loom's kill-switch, evidence, policy, simulation, idempotency, and

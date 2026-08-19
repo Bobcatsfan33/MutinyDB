@@ -22,11 +22,20 @@
 #   M1  crates/mutiny-bridge         substrate commit stream -> Schweep epoch inputs (MD-2)
 #   M2  crates/mutiny-semantic       Prism's operators inside the compute plane
 #   M3  crates/mutiny-trust          Loom's planes mounted over the shared catalog
+#   M4  crates/mutiny-taint          taint-as-retraction across every plane (K-2)
+#   M4  crates/mutiny-incident       the frozen incident corpus, gate, and dev-only demo host
 #   M6  crates/mutinyd               the one process, the three doors
 # Nothing may be added ahead of its phase. (§6: "no phase starts before its named gates".)
 [workspace]
 resolver = "3"
-members = ["crates/mutiny-charter", "crates/mutiny-bridge", "crates/mutiny-semantic", "crates/mutiny-trust"]
+members = [
+    "crates/mutiny-charter",
+    "crates/mutiny-bridge",
+    "crates/mutiny-semantic",
+    "crates/mutiny-trust",
+    "crates/mutiny-taint",
+    "crates/mutiny-incident",
+]
 exclude = [
     "components/loomdb",
     "components/prismdb",
@@ -45,6 +54,8 @@ loom-branch = { path = "components/loomdb/crates/loom-branch", default-features 
 loom-policy = { path = "components/loomdb/crates/loom-policy" }
 prism-types = { path = "components/prismdb/crates/prism-types" }
 schweep-log = { path = "components/schweep/crates/schweep-log" }
+schweep-memo = { path = "components/schweep/crates/schweep-memo" }
+schweep-server = { path = "components/schweep/crates/schweep-server" }
 schweep-zset = { path = "components/schweep/crates/schweep-zset" }
 serde = { version = "1", features = ["derive"] }
 substrate-pager = { path = "components/substrate/crates/substrate-pager" }

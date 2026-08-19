@@ -1,0 +1,37 @@
+# M4 — the frozen incident corpus host: dev-only, and not the supported product binary.
+#
+# This crate exists so the flagship taint incident is one committed, checksummed world shared by
+# the M4 gate, the mutation teeth, and the narrated demo example. It composes every plane the way
+# the supported `mutinyd` (M6) eventually will — which is exactly why it says out loud, in its
+# help text and its docs, that it is not that binary and carries no admission decision.
+[package]
+name = "mutiny-incident"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Dev-only composed host for the M4 frozen incident corpus, gate, and demo."
+
+[dependencies]
+loom-action.workspace = true
+loom-branch.workspace = true
+loom-core.workspace = true
+loom-policy.workspace = true
+mutiny-bridge = { path = "../mutiny-bridge" }
+mutiny-semantic = { path = "../mutiny-semantic" }
+mutiny-taint = { path = "../mutiny-taint" }
+mutiny-trust = { path = "../mutiny-trust" }
+prism-types.workspace = true
+schweep-log.workspace = true
+schweep-memo.workspace = true
+schweep-server.workspace = true
+schweep-zset.workspace = true
+substrate-pager.workspace = true
+substrate-wal.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+blake3.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true
