@@ -269,8 +269,11 @@ jobs:
           fi
           echo "sandbox verified: unshare works and outbound TCP fails inside it"
 
+      # Loopback is brought up INSIDE the namespace: M6's composed gates speak real HTTP over
+      # 127.0.0.1, and loopback is not egress — the interface list inside the sandbox is lo and
+      # nothing else, and the outbound-TCP proof above already showed the outside is unreachable.
       - name: Run the whole suite with no network
-        run: unshare -rn cargo test --workspace --all-features --locked --offline
+        run: unshare -rn bash -c 'ip link set lo up && cargo test --workspace --all-features --locked --offline'
 
   # A single required check, so branch protection has one name to point at rather than four that
   # drift as jobs are added.
