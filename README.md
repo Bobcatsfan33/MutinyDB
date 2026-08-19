@@ -7,8 +7,8 @@
 **Every answer current. Every fact accountable. Every world forkable.**
 
 [![CI](https://github.com/Bobcatsfan33/MutinyDB/actions/workflows/ci.yml/badge.svg)](https://github.com/Bobcatsfan33/MutinyDB/actions)
-[![Status](https://img.shields.io/badge/status-private%20consolidation-orange.svg)](#status--what-is-and-is-not-ready)
-[![License](https://img.shields.io/badge/license-Apache--2.0%20at%20release-blue.svg)](#license)
+[![Status](https://img.shields.io/badge/status-pre--release%20consolidation-orange.svg)](#status--what-is-and-is-not-ready)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 </div>
 
@@ -160,6 +160,7 @@ product result. We would rather you read the tests than the marketing.
 
 ## License
 
-Private during consolidation. **Apache-2.0** when the product's M8 release and professional naming
-clearance gates say otherwise — permanently, because a durability claim nobody can audit is worth
-nothing.
+**Apache-2.0** — see [LICENSE](LICENSE). Permanently, because a durability claim nobody can audit
+is worth nothing. The license is not the release: the product remains **not approved for
+production** until M8's release and naming-clearance gates pass, and nothing in this repository
+carries a warranty that its own gates do not prove.
