@@ -1,0 +1,65 @@
+== claims_current ==
+(claim_id: Utf8, branch: Utf8, subject: Utf8, asserts: Utf8, confidence_bp: Int64)
+("clm-1", "sess-a", "user-4471", "is_compromised", 9900) => 1
+
+== telemetry_current ==
+(event_id: Utf8, branch: Utf8, body: Utf8, cost_micros: Int64, error: Boolean, event_time: Int64)
+("evt-a1", "sess-a", "urgent credential compromise reported by scraped page", 12000000, true, 1001) => 1
+("evt-a2", "sess-a", "routine ledger reconciliation complete", 3000000, false, 1002) => 1
+("evt-a3", "sess-a", "routine settlement complete", 2000000, false, 1004) => 1
+("evt-b1", "sess-b", "urgent database security control alert", 11000000, true, 1006) => 1
+("evt-h1", "hyp-a", "routine backup verified after takeover check", 3000000, false, 1003) => 1
+("evt-h1", "sess-a", "routine backup verified after takeover check", 3000000, false, 1003) => 1
+("evt-x1", "hyp-b", "routine experiment probe abandoned", 5000000, false, 1005) => 1
+
+== derivation_current ==
+(tenant: Utf8, branch: Utf8, table_name: Utf8, row_key: Utf8, source_system: Utf8, source_record: Utf8, envelope: Utf8)
+("acme", "hyp-a", "telemetry", "6576742d6831", "ticket", "INC-42", "5a41944c30381522b1092788037622fce93c8da2b34aa5b2f30e220a4fdd891b") => 1
+("acme", "hyp-b", "mutiny_forks", "6879702d623a726577696e64", "loom", "branch/sess-a", "a938267ba5d7c44d616b44d372b51a911f1f5297e82001381c7f4ebc945628af") => 1
+("acme", "hyp-b", "telemetry", "6576742d7831", "ticket", "INC-42", "f080513695110ee009e0f02477d4dd97c65aace1424e9a6f0e5dd74f67262132") => 1
+("acme", "sess-a", "claims", "636c6d2d31", "erp", "ledger-9", "0931f0d5285add8642cc2d5e2b1adf5e02c0366f6c07a1fb1d04e1cac2235827") => 1
+("acme", "sess-a", "claims", "636c6d2d31", "web", "scraped-page-77", "0931f0d5285add8642cc2d5e2b1adf5e02c0366f6c07a1fb1d04e1cac2235827") => 1
+("acme", "sess-a", "mutiny_forks", "6879702d61", "loom", "branch/sess-a", "172589a466c8775d065fdac49c27bc1fbb3cdfad89d76254471cab1608bbaa84") => 1
+("acme", "sess-a", "mutiny_forks", "6879702d62", "loom", "branch/sess-a", "a0fcf2a0c44152c511fc6fa24417b274398768a69ac576a75f777808546484e9") => 1
+("acme", "sess-a", "telemetry", "6576742d6131", "web", "scraped-page-77", "b7689b9f572a08f5c61a76b3a022329e31c5524d8628934ac18d24e1436c34c2") => 1
+("acme", "sess-a", "telemetry", "6576742d6132", "erp", "ledger-9", "71decb520a0a1ccbe7af691c737478c4cd028b878ae6b3686f959ff360ba48bb") => 1
+("acme", "sess-a", "telemetry", "6576742d6133", "erp", "ledger-9", "238f8a6468775a8249102d64546282b5fe805123d3e21a5ab3d2d965ec1b2efe") => 1
+("acme", "sess-a", "telemetry", "6576742d6831", "loom", "merge/hyp-a", "9c6c6ec46d9fd688280f115931777849f49eb45ea649024640e5c5b45631f593") => 1
+("acme", "sess-a", "telemetry", "6576742d6831", "ticket", "INC-42", "9c6c6ec46d9fd688280f115931777849f49eb45ea649024640e5c5b45631f593") => 1
+("acme", "sess-b", "telemetry", "6576742d6231", "erp", "ledger-9", "b3005d77a7aec2e473c662e086c5df6f8074f7534726ab3e72604d2b8c95add6") => 1
+
+== cost_by_branch ==
+(branch: Utf8, total_cost: Int64, events: Int64)
+("hyp-a", 3000000, 1) => 1
+("hyp-b", 5000000, 1) => 1
+("sess-a", 20000000, 4) => 1
+("sess-b", 11000000, 1) => 1
+
+== claims_by_subject ==
+(subject: Utf8, supporting: Int64)
+("user-4471", 1) => 1
+
+== semantic:hyp-a:incident-similar ==
+1. evt-a1 score=0.747265
+2. evt-h1 score=0.368514
+3. evt-a2 score=0.160514
+
+== groups:hyp-a:incident-groups ==
+group 0: count=1 avg_cost=3.000000 error_rate=0.000000 exemplar=evt-a2 members=evt-a2
+group 1: count=2 avg_cost=7.500000 error_rate=0.500000 exemplar=evt-a1 members=evt-a1,evt-h1
+
+== semantic:sess-a:incident-similar ==
+1. evt-a1 score=0.747265
+2. evt-h1 score=0.368514
+3. evt-a3 score=0.257172
+
+== groups:sess-a:incident-groups ==
+group 0: count=1 avg_cost=3.000000 error_rate=0.000000 exemplar=evt-a2 members=evt-a2
+group 1: count=3 avg_cost=5.666667 error_rate=0.333333 exemplar=evt-a3 members=evt-a1,evt-a3,evt-h1
+
+== semantic:sess-b:incident-similar ==
+1. evt-b1 score=0.578352
+
+== groups:sess-b:incident-groups ==
+group 0: count=1 avg_cost=11.000000 error_rate=1.000000 exemplar=evt-b1 members=evt-b1
+

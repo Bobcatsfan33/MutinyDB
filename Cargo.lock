@@ -726,6 +726,17 @@ name = "mutiny-charter"
 version = "0.0.0"
 
 [[package]]
+name = "mutiny-forks"
+version = "0.1.0"
+dependencies = [
+ "loom-branch",
+ "loom-core",
+ "schweep-zset",
+ "substrate-pager",
+ "thiserror",
+]
+
+[[package]]
 name = "mutiny-incident"
 version = "0.1.0"
 dependencies = [
@@ -735,6 +746,7 @@ dependencies = [
  "loom-core",
  "loom-policy",
  "mutiny-bridge",
+ "mutiny-forks",
  "mutiny-semantic",
  "mutiny-taint",
  "mutiny-trust",

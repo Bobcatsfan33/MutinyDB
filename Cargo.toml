@@ -24,6 +24,7 @@
 #   M3  crates/mutiny-trust          Loom's planes mounted over the shared catalog
 #   M4  crates/mutiny-taint          taint-as-retraction across every plane (K-2)
 #   M4  crates/mutiny-incident       the frozen incident corpus, gate, and dev-only demo host
+#   M5  crates/mutiny-forks          forked standing state: spike evidence + fork lineage (K-3)
 #   M6  crates/mutinyd               the one process, the three doors
 # Nothing may be added ahead of its phase. (§6: "no phase starts before its named gates".)
 [workspace]
@@ -35,6 +36,7 @@ members = [
     "crates/mutiny-trust",
     "crates/mutiny-taint",
     "crates/mutiny-incident",
+    "crates/mutiny-forks",
 ]
 exclude = [
     "components/loomdb",

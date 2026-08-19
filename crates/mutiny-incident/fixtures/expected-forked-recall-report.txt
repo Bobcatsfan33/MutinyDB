@@ -1,0 +1,20 @@
+RECALL REPORT — tainted source: web:scraped-page-77
+The reversible writes below are DONE, not proposed: the engine already healed them.
+
+⚠  1 ACTION(S) ALREADY HAPPENED IN THE WORLD AND CANNOT BE UNDONE BY THIS DATABASE.
+   Retraction heals writes. It does not un-suspend an account.
+
+   • identity.suspend_account → user-4471
+       requested by:  act_agent-responder
+       receipt:       okta:suspend:user-4471
+       CAN BE COMPENSATED: identity.reinstate_account
+       → run the registered compensating action (identity.reinstate_account) for identity.suspend_account on user-4471, then confirm with the affected party.
+
+2 write(s) downstream of this source were ALREADY HEALED by the engine:
+
+   • claims/636c6d2d31 [sess-a]
+       admitted by envelope 0931f0d5285add8642cc2d5e2b1adf5e02c0366f6c07a1fb1d04e1cac2235827
+   • telemetry/6576742d6131 [sess-a]
+       admitted by envelope b7689b9f572a08f5c61a76b3a022329e31c5524d8628934ac18d24e1436c34c2
+
+Every standing answer has already corrected itself through the ordinary delta path. The irreversible section, if any, is yours.

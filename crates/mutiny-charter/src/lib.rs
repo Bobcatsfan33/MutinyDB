@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 /// The decision records M0 must produce, in order. Adding a record to the charter means adding it
 /// here; a record on disk that is not named here is not part of the gate.
-pub const REQUIRED_RECORDS: &[&str] = &["MD-1", "MD-2", "MD-3", "MD-4", "MD-6"];
+pub const REQUIRED_RECORDS: &[&str] = &["MD-1", "MD-2", "MD-3", "MD-4", "MD-5", "MD-6"];
 
 /// The sections every record carries, in this order. The order is part of the contract: a reader
 /// who opens any record finds the options before the decision, and the consequences after it.

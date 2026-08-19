@@ -17,6 +17,7 @@ loom-branch.workspace = true
 loom-core.workspace = true
 loom-policy.workspace = true
 mutiny-bridge = { path = "../mutiny-bridge" }
+mutiny-forks = { path = "../mutiny-forks" }
 mutiny-semantic = { path = "../mutiny-semantic" }
 mutiny-taint = { path = "../mutiny-taint" }
 mutiny-trust = { path = "../mutiny-trust" }

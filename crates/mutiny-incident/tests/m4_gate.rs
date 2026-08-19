@@ -108,7 +108,7 @@ fn declared_downstream(
 fn oracle_answers(corpus: &Corpus, sources: &[&SourceRef]) -> String {
     let omit = declared_downstream(corpus, sources);
     let mut oracle = corpus.clone();
-    oracle.commits.retain(|commit| {
+    oracle.retain_commits(|commit| {
         !omit.contains(&(
             commit.branch.clone(),
             commit.table.clone(),
@@ -399,13 +399,22 @@ fn every_plane_heals_from_one_taint_call() {
 #[test]
 fn tooth_a_a_dropped_derivation_edge_cannot_pass_the_oracle_gate() {
     let mut corpus = corpus::parse(corpus::CORPUS).expect("corpus parses");
-    let commit = corpus
-        .commits
-        .iter_mut()
-        .find(|commit| commit.key == "clm-1")
-        .expect("the multi-source claim");
-    assert_eq!(commit.sources.len(), 2, "clm-1 is the multi-source claim");
-    commit.sources.retain(|source| source.system != "web");
+    assert_eq!(
+        corpus
+            .commits
+            .iter()
+            .find(|commit| commit.key == "clm-1")
+            .expect("the multi-source claim")
+            .sources
+            .len(),
+        2,
+        "clm-1 is the multi-source claim"
+    );
+    corpus.map_commits(|commit| {
+        if commit.key == "clm-1" {
+            commit.sources.retain(|source| source.system != "web");
+        }
+    });
 
     let storage = tempfile::tempdir().expect("storage");
     let compute = tempfile::tempdir().expect("compute");

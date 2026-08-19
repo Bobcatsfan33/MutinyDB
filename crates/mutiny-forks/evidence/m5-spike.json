@@ -1,0 +1,9 @@
+{
+  "spike": "M5 copy-on-write operator state on substrate pages",
+  "layout": "loom-branch Tree over substrate_pager::Pager (in-memory), row store + rank index + rollup",
+  "fork_open_median_ns": { "entries_1k": 3459, "entries_10k": 4625, "entries_50k": 3666 },
+  "pages_per_single_row_update_at_50k": { "median": 5, "max": 171, "budget": 16 },
+  "divergent_updates_per_side": 200,
+  "criteria": { "C1": "PASS", "C2_median": "PASS", "C2_worst_case": "FAIL", "C3": "PASS", "C4": "assessed in MD-5" },
+  "machine": "darwin-arm64 dev host, unloaded, cargo test (debug)"
+}
