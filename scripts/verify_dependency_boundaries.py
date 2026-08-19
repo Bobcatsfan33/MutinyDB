@@ -46,6 +46,22 @@ ALLOWED_COMPONENT_EDGES = {
         "schweep-zset",
         "substrate-pager",
     },
+    # M6: mutinyd is the one surface — the composed-development form of the product binary
+    # (docs/M6-SURFACE.md's quarantine notice governs its distribution). It composes every plane
+    # behind one admission boundary, which is why its reviewed edge set is the union.
+    "mutinyd": {
+        "loom-action",
+        "loom-branch",
+        "loom-core",
+        "loom-policy",
+        "prism-types",
+        "schweep-log",
+        "schweep-memo",
+        "schweep-server",
+        "schweep-zset",
+        "substrate-pager",
+        "substrate-wal",
+    },
     # M4: the dev-only incident host composes every plane the supported M6 binary eventually
     # will; it is not that binary and produces no release artifact.
     "mutiny-incident": {

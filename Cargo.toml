@@ -25,7 +25,7 @@
 #   M4  crates/mutiny-taint          taint-as-retraction across every plane (K-2)
 #   M4  crates/mutiny-incident       the frozen incident corpus, gate, and dev-only demo host
 #   M5  crates/mutiny-forks          forked standing state: spike evidence + fork lineage (K-3)
-#   M6  crates/mutinyd               the one process, the three doors
+#   M6  crates/mutinyd               the one process, the three doors (composed-development form)
 # Nothing may be added ahead of its phase. (§6: "no phase starts before its named gates".)
 [workspace]
 resolver = "3"
@@ -37,6 +37,7 @@ members = [
     "crates/mutiny-taint",
     "crates/mutiny-incident",
     "crates/mutiny-forks",
+    "crates/mutinyd",
 ]
 exclude = [
     "components/loomdb",
@@ -60,6 +61,7 @@ schweep-memo = { path = "components/schweep/crates/schweep-memo" }
 schweep-server = { path = "components/schweep/crates/schweep-server" }
 schweep-zset = { path = "components/schweep/crates/schweep-zset" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 substrate-pager = { path = "components/substrate/crates/substrate-pager" }
 substrate-wal = { path = "components/substrate/crates/substrate-wal" }
 thiserror = "2"

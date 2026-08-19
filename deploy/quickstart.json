@@ -1,0 +1,24 @@
+{
+  "listen": "0.0.0.0:7654",
+  "operator_token": "quickstart-operator",
+  "data_dir": "/data",
+  "embedding": {"dim": 16, "version": "m4-v1"},
+  "tenants": [{
+    "name": "quickstart",
+    "quota": {"requests_per_sec": 1000, "bytes_per_sec": 8388608, "queue_depth": 64},
+    "tables": [
+      {"name": "telemetry",
+       "columns": [["event_id","utf8"],["branch","utf8"],["body","utf8"],["cost_micros","int64"],["error","bool"],["event_time","int64"]],
+       "key_column": "event_id", "branch_column": "branch", "plane": "events",
+       "semantic": {"body_column":"body","event_time_column":"event_time","cost_micros_column":"cost_micros","error_column":"error"}},
+      {"name": "claims",
+       "columns": [["claim_id","utf8"],["branch","utf8"],["subject","utf8"],["asserts","utf8"],["confidence_bp","int64"]],
+       "key_column": "claim_id", "branch_column": "branch", "plane": "memory"}
+    ],
+    "semantic_standing": {
+      "topk": [{"id": "incident-similar", "text": "urgent credential compromise investigation", "k": 3}],
+      "groups": [{"id": "incident-groups", "anchors": ["urgent security incident", "routine operations"]}]
+    },
+    "connectors": [{"action_type": "identity.suspend_account", "compensating_action": "identity.reinstate_account", "receipt_prefix": "okta:suspend"}]
+  }]
+}

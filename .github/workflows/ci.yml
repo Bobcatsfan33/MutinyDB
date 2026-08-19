@@ -178,10 +178,8 @@ jobs:
         run: cargo test -p mutiny-taint --locked -- --nocapture
       - name: Prove the frozen incident corpus heals to the never-ingested oracle, with teeth and crash seams
         run: cargo test -p mutiny-incident --locked --test m4_gate -- --nocapture
-      - name: Prove the dev demo runs and says it is not the product binary
-        run: |
-          cargo run -p mutiny-incident --locked --example incident_demo -- --help | grep -q "NOT the supported mutinyd"
-          cargo run -p mutiny-incident --locked --example incident_demo > /dev/null
+      # The M4 dev demo binary was retired at M6; the supported form of the flagship demo is the
+      # scripted agent over MCP against mutinyd, run by the m6-surface job (docs/M6-SURFACE.md).
 
   m5-forks:
     name: M5 forked standing state gate and spike evidence
@@ -200,6 +198,34 @@ jobs:
         run: cargo test -p mutiny-incident --locked --test m5_gate -- --nocapture
       - name: Prove the fork economics are O(state), said out loud
         run: cargo test -p mutiny-incident --locked --test m5_fork_cost -- --nocapture
+
+  m6-surface:
+    name: M6 one surface — doors, same-door law, kill matrix, soak, MCP demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Prove the doors, the same-door law, the resume tokens, and teeth (a)(b)
+        run: cargo test -p mutinyd --locked --test m6_gate -- --nocapture
+      - name: Prove the kill matrix at PR scale (the nightly runs 1,000)
+        run: M6_KILLS=60 cargo test -p mutinyd --locked --test m6_kill_matrix -- --nocapture
+      - name: Prove the soak's flat shape at PR scale (the nightly runs the long soak)
+        run: M6_SOAK_SECS=30 cargo test -p mutinyd --locked --test m6_soak -- --nocapture
+      - name: Run the flagship end-to-end over MCP (the supported demo form)
+        run: |
+          cargo run -p mutinyd --locked --example incident_demo_mcp -- --help | grep -q "NOT a supported"
+          cargo run -p mutinyd --locked --example incident_demo_mcp > /dev/null
+
+  m6-quickstart:
+    name: M6 quickstart, verbatim from the README (tooth c)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Run exactly what the README tells a stranger to run
+        run: ./scripts/run_quickstart.sh
 
   no-egress:
     name: no-egress
@@ -243,15 +269,18 @@ jobs:
           fi
           echo "sandbox verified: unshare works and outbound TCP fails inside it"
 
+      # Loopback is brought up INSIDE the namespace: M6's composed gates speak real HTTP over
+      # 127.0.0.1, and loopback is not egress — the interface list inside the sandbox is lo and
+      # nothing else, and the outbound-TCP proof above already showed the outside is unreachable.
       - name: Run the whole suite with no network
-        run: unshare -rn cargo test --workspace --all-features --locked --offline
+        run: unshare -rn bash -c 'ip link set lo up && cargo test --workspace --all-features --locked --offline'
 
   # A single required check, so branch protection has one name to point at rather than four that
   # drift as jobs are added.
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [component-integrity, component-compatibility, fmt, clippy, test, m1-bridge, m2-semantic, m3-trust, m4-taint, m5-forks, no-egress]
+    needs: [component-integrity, component-compatibility, fmt, clippy, test, m1-bridge, m2-semantic, m3-trust, m4-taint, m5-forks, m6-surface, m6-quickstart, no-egress]
     if: always()
     steps:
       - name: Fail if any job did not succeed

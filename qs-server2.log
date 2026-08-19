@@ -1,0 +1,6 @@
+mutinyd v0 — composed-development build: every linked component is release-quarantined (components.lock.json); NOT a supported or distributable artifact until M8's release gates clear
+listening 0.0.0.0:7654
+{"commit_seq":"1","epoch":"1","event":"epoch_sealed","tenant":"quickstart","ts_ms":1787144215838}
+{"commit_seq":"2","epoch":"2","event":"epoch_sealed","tenant":"quickstart","ts_ms":1787144215894}
+{"commit_seq":"3","epoch":"3","event":"epoch_sealed","tenant":"quickstart","ts_ms":1787144216020}
+{"event":"shutdown","report":"shutdown\ntenant quickstart\nepoch 3\npending_appends 0\nregistrations 1\n","ts_ms":1787144216063}

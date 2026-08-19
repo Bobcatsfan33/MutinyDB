@@ -1,0 +1,40 @@
+# M6 — mutinyd: one process, one admission boundary, three doors (docs/M6-SURFACE.md).
+#
+# THE QUARANTINE NOTICE GOVERNS: every component this binary links is release-quarantined
+# (components.lock.json, 0 admitted), so mutinyd is the composed-development form of the product
+# binary — built, gated, and documented as the supported surface SHAPE, distributable only when
+# M8's release gates and the lock's blockers clear. --help and /health say so.
+[package]
+name = "mutinyd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "MutinyDB's one surface: SQL, typed, and MCP doors over one admission boundary."
+
+[dependencies]
+loom-action.workspace = true
+loom-branch.workspace = true
+loom-core.workspace = true
+loom-policy.workspace = true
+mutiny-bridge = { path = "../mutiny-bridge" }
+mutiny-forks = { path = "../mutiny-forks" }
+mutiny-semantic = { path = "../mutiny-semantic" }
+mutiny-taint = { path = "../mutiny-taint" }
+mutiny-trust = { path = "../mutiny-trust" }
+prism-types.workspace = true
+schweep-log.workspace = true
+schweep-memo.workspace = true
+schweep-server.workspace = true
+schweep-zset.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+substrate-pager.workspace = true
+substrate-wal.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+blake3.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true
