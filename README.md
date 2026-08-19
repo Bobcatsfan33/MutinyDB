@@ -1,75 +1,152 @@
+<div align="center">
+
 # MutinyDB
 
-**One database for continuously correct, provenance-aware agent state.** MutinyDB consolidates
-Schweep's incremental compute, LoomDB's trust and branch model, PrismDB's semantic event tier, and
-substrate's durable storage into one supported product and one source repository.
+### The agent-native database.
 
-MutinyDB's defining operation is source recall: a write records what it derived from; every commit
-becomes one compute epoch; `taint(source)` retracts that source through all standing computations;
-reversible answers repair themselves; irreversible external actions remain visible first, with the
-receipts and compensation required to address them.
+**Every answer current. Every fact accountable. Every world forkable.**
 
-## Current product decision
+[![CI](https://github.com/Bobcatsfan33/MutinyDB/actions/workflows/ci.yml/badge.svg)](https://github.com/Bobcatsfan33/MutinyDB/actions)
+[![Status](https://img.shields.io/badge/status-private%20consolidation-orange.svg)](#status--what-is-and-is-not-ready)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20at%20release-blue.svg)](#license)
 
-**Not approved for production. Not a software release candidate.**
+</div>
 
-The consolidation has completed **M1**, the composed **M2 semantic path**, and the **M3 mounted trust plane**. The complete source of all four components is present
-under `components/`, pinned to exact commits and trees by [`components.lock.json`](components.lock.json).
-Presence and development linkage are not release admission: every component remains quarantined
-until its exact release and composed product gates pass. `mutiny-bridge` now implements the first
-real substrate/Loom/Schweep seam. `mutiny-semantic` now provides generation-pinned bridge
-embedding, bounded incremental top-k and mergeable grouping, dual-generation cutover, cold one-shot
-routing, and exact PrismDB oracle gates. `mutiny-trust` mounts Loom capability checks over
-branch-scoped standing results and separates inert agent proposals from the operator-only action
-gateway by type. Cross-circuit taint, durable forked operator state, a supported `mutinyd` binary,
-fleet operation, external assurance, and production approval remain open.
+---
 
-| Component | Product role | Imported state | Admission |
-| --- | --- | --- | --- |
-| substrate | storage | `substrate-v1.6.0` | quarantined pending compatibility |
-| LoomDB | trust, branches, provenance, policy, action gateway | `loomdb-v0.5.1` | quarantined pending mounted-oracle gates |
-| PrismDB | semantic event parts, generations, exact/approximate search | unreleased snapshot `84e5a4f`; version contract and AWS KMS provider merged | blocked on a release, live AWS KMS receipt, and composed release gates |
-| Schweep | incremental circuits, epochs, standing answers | exact unreleased snapshot `220bf6b`; C11–C13 implementation complete | blocked on the remaining scheduled-night evidence, `current-v0.1`, and composed release admission |
+Every major database of the last two decades — ClickHouse, Snowflake, Elasticsearch, MongoDB —
+shares one assumption: **an answer must be recomputed to be trusted.** You ask; the engine scans;
+you pay O(data), every time, forever. MutinyDB is the mutiny against that assumption.
 
-This distinction is enforced, not editorial. `scripts/verify_component_lock.py` recomputes the
-indexed tree of every import and refuses an unreleased or blocked component marked admitted.
+In MutinyDB, a query is a **standing computation**: it compiles once into an incremental circuit
+and stays continuously correct as changes flow through it. Keeping an answer right costs
+O(change). Reading it costs a lookup. And because the storage engine's commits *are* the change
+feed, there is no CDC pipeline, no lag ambiguity, and no moment where the dashboard and the
+database disagree.
+
+It is built for the client that breaks every database designed for humans: the AI agent — which
+asks the same questions at machine frequency, derives facts from sources that can turn out to be
+poisoned, and needs to try three hypotheses without committing to any of them.
+
+## The query no other database can run
+
+```sql
+SELECT m.claim_id, m.confidence, e.event_id, r.revenue_impact
+FROM   memory.claims    AS m
+JOIN   events.telemetry AS e ON e.session_id = m.session_id
+JOIN   analytics.rollups AS r ON r.account_id = m.subject_id
+WHERE  e.embedding ≈≈ 'the tool call timed out and we retried'  -- meaning, ranked and bounded
+  AND  r.period = '2026-Q3' AND e.cost < 0.02                   -- scalars
+  AS OF BRANCH 'session-7841'                                   -- the agent's world, not main
+  AND NOT TAINTED BY SOURCE 's:scraped-page-77'                 -- provenance, as a predicate
+LIMIT 20;
+```
+
+Meaning, scalars, branch scope, and provenance in one plan — and the answer is *standing*: it
+maintains itself as data changes, on the agent's own fork of the world.
+
+## Three capabilities that exist nowhere else
+
+**Commit-as-delta.** Every incremental engine's weak point is change capture; every deployment
+bolts on a fragile CDC layer. Here the storage engine emits deltas as a physical byproduct of
+committing: one commit = one compute epoch, audited page-against-capture, exactly-once by content
+address. The durability boundary and the visibility boundary are the same boundary.
+
+**Taint-as-retraction.** A write records what it derived from — enforced at the write path, not as
+skippable middleware. When a source turns out to be poisoned, `taint(source)` retracts it through
+every standing computation: reversible answers repair *themselves* by the same propagation that
+keeps dashboards current, and irreversible external actions are listed first, with receipts and
+registered compensations. Other databases answer "we don't know what it touched." This one
+un-touches it.
+
+**Forked standing state.** A session is a branch of the database — an O(1) fork of a
+content-addressed store. An agent tries three hypotheses on three branches, each with its own
+branch-scoped, continuously-current answers, merges the winner at record granularity, and rewinds
+the rest — auditable, never destroyed.
 
 ## Architecture
 
-The product has five planes with directed dependencies:
+Five planes, directed dependencies, enforced by an allowed-edge matrix read from the build graph —
+not by convention:
 
 ```text
-fleet/ops -> trust -> compute -> semantic -> storage
-                         |                     ^
-                         +---- bridge ----------+
+  fleet/ops ─► trust ─► compute ─► semantic ─► storage
+                          │                      ▲
+                          └───── bridge ────────┘
 ```
 
-- **Trust:** branches, envelopes, provenance, claims, policy, and propose-not-execute actions.
-- **Compute:** DBSP-style standing query circuits and shared subplans.
-- **Semantic:** bounded semantic operators in compute plus Prism's immutable cold/scan tier.
-- **Storage:** substrate commits, pages, WAL, snapshots, and forks.
-- **Fleet/ops:** tenant pools, registry, sleep/wake, resource governance, and deployment controls.
+- **Trust** (from LoomDB): branches, write envelopes, provenance, claims, policy — and a
+  propose-not-execute action gateway where the agent handle *has no execute method, by type*.
+- **Compute** (from Schweep): DBSP-style standing circuits, epochs, shared subplans — the
+  ten-thousandth near-duplicate query costs a sliver of the first.
+- **Semantic** (from PrismDB): bounded semantic operators inside compute, plus an immutable,
+  meaning-clustered cold tier with exact-oracle-measured recall.
+- **Storage** (substrate): content-addressed pages, one WAL, O(1) fork/snapshot/rewind, sleep/wake
+  to object storage.
+- **Fleet/ops**: tenant pools, registry, sleep/wake economics — a million idle databases cost the
+  price of their bytes.
 
-The binding details are in [`CONSOLIDATION-ROADMAP.md`](CONSOLIDATION-ROADMAP.md) and
-[`docs/decisions`](docs/decisions). [MD-6](docs/decisions/MD-6.md) executes the one-repository product
-topology while preserving exact source provenance and release admission.
+Binding contracts: [`CONSOLIDATION-ROADMAP.md`](CONSOLIDATION-ROADMAP.md) ·
+[`docs/decisions`](docs/decisions) · [MD-6](docs/decisions/MD-6.md) (one-repository topology with
+exact source provenance).
 
-## Current composed gates
+## Built from proven parts — and quarantined until proven together
 
-1. Every imported tree matches `components.lock.json`.
-2. `mutiny-bridge` maps one storage commit to one compute epoch, requires a real Loom envelope,
-   stores the capture in the same substrate transaction, audits physical pages against captured
-   logical changes, and survives the storage-to-compute gap plus every append/seal crash seam.
-3. The randomized differential gate remains byte-identical to an independent direct-ingest control.
-4. Schweep produces `current-v0.1` after seven qualifying scheduled nights. Development uses the
-   exact merged C13 snapshot; no product release may treat that snapshot as admitted.
-5. Root compatibility, M0 charter, and component provenance gates remain green.
-6. M2's frozen hybrid corpus traverses bridge embedding, incremental top-k, semantic grouping,
-   dual-generation cutover, and cold routing; real Prism exact and rerank answers match bit-for-bit.
-7. M3's branch-result isolation gate, Loom scripted MCP demo, and four unmodified Loom model oracles
-   remain green; the agent handle contains no action gateway.
+Each plane arrives from a codebase with its own public evidence record. **No claim is inherited
+merely because a component repository made one about itself** — every component stays quarantined
+until its exact release and the composed product gates pass, and
+[`scripts/verify_component_lock.py`](scripts/verify_component_lock.py) refuses an unreleased or
+blocked component marked admitted. That distinction is enforced, not editorial.
 
-## Run the current gates
+| Component | Product role | What its own gates prove | Imported state | Admission |
+| --- | --- | --- | --- | --- |
+| [substrate](https://github.com/Bobcatsfan33/substrate) | storage | 98 ns fork · 50,000 randomized crash-recover cycles · airgap by compile-time amputation | `substrate-v1.6.0` | quarantined pending compatibility |
+| [LoomDB](https://github.com/Bobcatsfan33/loomdb) | trust | record-level merge under four model oracles · taint → two-section RecallPlan · flat-memory soaks | `loomdb-v0.5.1` | quarantined pending mounted-oracle gates |
+| [PrismDB](https://github.com/Bobcatsfan33/PrismDB) | semantic | byte-identical answers across 1/2/4-shard layouts · encryption: nothing legible at rest, rotation without rewriting a part byte | snapshot `84e5a4f` + AWS KMS provider | blocked on a release, live KMS receipt, composed gates |
+| [Schweep](https://github.com/Bobcatsfan33/schweep) | compute | every answer proven against a from-scratch oracle · 1,000 real SIGKILLs with 24,219 acked appends exactly-once · 2.16 GB of operator state under a 128 MiB memory ceiling | snapshot `220bf6b`, C11–C13 complete | blocked on scheduled-night evidence, `current-v0.1`, composed admission |
+
+## What is composed and green today
+
+- **M1 — the bridge.** One storage commit → one compute epoch; a real Loom envelope required at
+  admission; write-set captured in the same substrate transaction; physical pages audited against
+  captured logical changes; crash-proven across every append/seal seam. Randomized histories
+  through the bridge remain **byte-identical to an independent direct-ingest control**.
+- **M2 — the semantic path.** Generation-pinned embedding in the bridge, bounded incremental
+  top-k, mergeable semantic grouping, dual-generation cutover, cold one-shot routing — a frozen
+  hybrid corpus traverses all of it and **matches real PrismDB exact and rerank answers
+  bit-for-bit**.
+- **M3 — the mounted trust plane.** Loom capability checks over branch-scoped standing results;
+  branch-result isolation gated; the scripted MCP demo green; **all four Loom model oracles run
+  unmodified** against the mounted configuration; the agent handle contains no action gateway.
+
+Details: [`docs/M1-BRIDGE.md`](docs/M1-BRIDGE.md) · [`docs/M2-SEMANTIC.md`](docs/M2-SEMANTIC.md) ·
+[`docs/M3-TRUST.md`](docs/M3-TRUST.md)
+
+## Status — what is and is not ready
+
+**Not approved for production. Not a software release candidate.**
+
+Still open, named rather than implied: cross-circuit taint (M4), durable forked operator state
+(M5), a supported `mutinyd` binary (M6), fleet operation (M7), external assurance and production
+approval (M8). Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
+PrismDB's admission requires a release and a live KMS receipt. The roadmap runs on exit gates, not
+dates.
+
+| Phase | M1 bridge | M2 semantic | M3 trust | M4 taint | M5 forks | M6 mutinyd | M7 fleet | M8 release |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | ✅ | ✅ | ✅ | ◎ | ◎ | ◎ | ◎ | ◎ |
+
+## The evidence culture
+
+This system is being built fast, largely by AI, under human review — which is a legitimate reason
+to distrust it, and the reason nothing here ships on enthusiasm. Every answer is proven against a
+naive oracle that recomputes from scratch. Every durability claim survives randomized crash
+injection with the fault count *asserted* — a harness that injected nothing fails. Every gate has
+proven it can fail, via marker-grepped mutations with the catching instrument named. Every tuned
+constant lives in an evidence ledger with the benchmark artifact that justifies it. Every
+limitation is written down before an evaluator finds it.
+
+Run the composed gates yourself:
 
 ```sh
 python3 scripts/verify_component_lock.py
@@ -79,13 +156,10 @@ cargo test --workspace --all-features --locked
 ```
 
 The nested component workflows are retained as import provenance; root workflows own the composed
-product result. No performance, security, availability, or enterprise-approval claim is inherited
-merely because a component repository made one about itself.
+product result. We would rather you read the tests than the marketing.
 
-The implemented write/recovery boundary and its bounded-transaction rule are documented in
-[`docs/M1-BRIDGE.md`](docs/M1-BRIDGE.md).
-The semantic and mounted trust contracts are documented in [`docs/M2-SEMANTIC.md`](docs/M2-SEMANTIC.md)
-and [`docs/M3-TRUST.md`](docs/M3-TRUST.md).
+## License
 
-Private during consolidation. Apache-2.0 when the product's M8 release and professional naming
-clearance gates say otherwise.
+Private during consolidation. **Apache-2.0** when the product's M8 release and professional naming
+clearance gates say otherwise — permanently, because a durability claim nobody can audit is worth
+nothing.
