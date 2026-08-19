@@ -89,15 +89,43 @@ result, not a failure.
 
 ### Verdict — recorded after the spike run (evidence: `crates/mutiny-forks/evidence/m5-spike.json`)
 
-*Pending. The criteria above are fixed as of this writing; the spike has not run. The verdict,
-its measurements, and the C4 written assessment land here when it has, and nothing above this
-line changes in response to what it finds.*
+- **C1 PASS.** Median fork-and-open latency is flat in state size: 3.46 µs at 1,000 entries,
+  4.63 µs at 10,000, 3.67 µs at 50,000 (frozen run; a second run measured 3.46/3.54/4.79 — the
+  jitter between runs exceeds any size trend). The 2× bound holds with a wide margin: the fork is
+  a manifest reference, exactly as K-3 hopes.
+- **C2 — PASS on the median, FAIL on the worst case, and the criterion did not say which.**
+  Median 5 pages per single-row update; worst case 171 in 200 updates (a node-split/rebalance
+  cascade rewriting a long path). The criterion as committed fixed "≤ 16" without naming the
+  statistic; resolving that ambiguity *after* seeing the numbers, in the favorable direction,
+  is exactly what this repository's evidence culture forbids — so both readings are recorded and
+  the worst-honest reading counts C2 as failed. Either way the amplification is real: even the
+  median is 5× the data write the delta already made, paid per delta per forked query.
+- **C3 PASS.** 200 child-only updates left the idle parent's rendering byte-identical; 200
+  further interleaved updates per side matched the independent in-memory model's top-k and rollup
+  at every step. The layout answers correctly.
+- **C4 FAIL.** The layout is adoptable by the branch-carried operators MutinyDB owns — the spike
+  is that adoption in miniature — but a session branch's standing answers at v1 are maintained by
+  circuit machinery whose state sits behind Schweep's frozen `StateBackend` (§5.5: no fork
+  operation, and `snapshot() -> Vec<u8>` is an O(state) freeze by design) and whose instantiation
+  is engine-global (one factory, one registry, one epoch clock per MD-2 B3). Making circuit state
+  forkable is Schweep-track work — a forkable backend contract or a per-branch instantiation
+  surface — and MD-1 R3/R4 forbid this repository from amending that track or waiting on an
+  unmade release. Partial adoption (pages for the mutiny-owned operators, clones for the rest)
+  would ship the O(1) *claim* attached to a system that cannot honor it end-to-end.
+
+**Verdict: NO-GO for v1 — Option B, taken deliberately.** C4 fails outright and C2 fails under
+the worst-honest reading; C1 and C3 stand as evidence that the layout itself is viable, so the
+post-v1 path is real: when Schweep's own track grows a forkable state surface, the CoW layout
+resurfaces with these numbers as its baseline — including the split-cascade worst case that any
+production adoption must bound first. MD-1 is **not** amended; the fallback needs no new edge.
+Everywhere the O(1) claim might be assumed — the README's K-3 paragraph, `docs/M5-FORKS.md`, the
+fork-cost ledger — the shipped economics are stated as what they are: **fork cost is O(state),
+measured and published.**
 
 ## Consequences
 
-*Written for the path the verdict selects; the Option B consequences below were drafted with the
-criteria (the roadmap pre-decided the fallback's shape), and are struck or confirmed by the
-verdict rather than silently rewritten.*
+*Drafted with the criteria for the roadmap's pre-decided fallback shape; confirmed by the
+verdict.*
 
 - **Fork is O(state), and it says so.** The M5 build (Option B) records every fork and rewind as
   an ordinary commit through the M1 front door (`mutiny_forks` on the tenant's epoch clock),
