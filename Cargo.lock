@@ -802,6 +802,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "mutinyd"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "loom-action",
+ "loom-branch",
+ "loom-core",
+ "loom-policy",
+ "mutiny-bridge",
+ "mutiny-forks",
+ "mutiny-semantic",
+ "mutiny-taint",
+ "mutiny-trust",
+ "prism-types",
+ "schweep-log",
+ "schweep-memo",
+ "schweep-server",
+ "schweep-zset",
+ "serde",
+ "serde_json",
+ "substrate-pager",
+ "substrate-wal",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"

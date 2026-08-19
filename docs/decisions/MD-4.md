@@ -251,3 +251,20 @@ source tree directly into MutinyDB, so the earlier deliberate deferral no longer
 repository. MD-1, MD-2, MD-3, the roadmap, workspace comments, and CI labels are rewritten now,
 during the M0 reset, rather than waiting for M1. Historical discussion in this record keeps the old
 name where it describes the choice that was made.
+
+## Addendum — 2026-08-19 (M6): the release-tag name is resolved — `current-v0.1` is real
+
+The D-21 rename made this repository's `current-v0.1` references look inconsistent: a renamed
+engine, an old-named tag. Determined from the engine's own documents rather than inferred: the
+Schweep release decision (its D-30, `docs/DECISIONS.md`) states verbatim that *"the architecture's
+historical release tag `current-v0.1` remains the tag of record and points to package version
+0.1.0"* — deliberately not renamed, deliberately not created until D-31's seven-qualifying-nights
+evidence gate authorizes it, and `docs/current-api.md` freezes the supported surface for the
+`current-v0.1` line under that name. The first Schweep-named tag would belong to the engine's 0.2
+line, on its own track.
+
+**Resolution:** every reference in this repository (`components.lock.json`, the roadmap §1, the
+README, MD-2, `docs/M1-BRIDGE.md`) already says `current-v0.1`, and that is correct — no reference
+is rewritten. What was missing was this record, so the next reader does not repeat the
+investigation: the tag keeps its historical name by the engine's own decision, and a
+`schweep-v0.1` tag does not and will not exist for the 0.1 line.

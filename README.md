@@ -140,23 +140,86 @@ blocked component marked admitted. That distinction is enforced, not editorial.
   byte-identical answers through injected mid-fork and mid-merge crashes, and one taint call
   heals the parent **and** the fork's inherited state on the forked incident corpus.
 
+- **M6 — one surface.** `mutinyd`: every plane behind one admission boundary (per-tenant quotas,
+  round-robin fairness, envelopes unbypassable) and three doors — HTTP-SQL, typed, and MCP —
+  holding the **same-door law composed**: identical plans, identical counters, and an admission
+  ledger every door must appear in. The flagship incident runs end-to-end **over MCP by a
+  scripted agent** (the supported demo form; the M4 dev binary is retired); the MCP tool registry
+  has no execute and no taint by construction. Reliability at the composed level: a real
+  SIGKILL matrix under concurrent ingest+query+subscribe+taint load (1,000 kills nightly,
+  exactly-once, no double epoch to subscribers, recovery equals the never-crashed twin) and a
+  soak whose memory stays flat in shape and budget with taint-as-retraction as the boundedness
+  mechanism. The quickstart below runs verbatim in CI. `mutinyd` remains the
+  composed-development form of the binary — the quarantine notice in
+  [`docs/M6-SURFACE.md`](docs/M6-SURFACE.md) governs until M8.
+
 Details: [`docs/M1-BRIDGE.md`](docs/M1-BRIDGE.md) · [`docs/M2-SEMANTIC.md`](docs/M2-SEMANTIC.md) ·
 [`docs/M3-TRUST.md`](docs/M3-TRUST.md) · [`docs/M4-TAINT.md`](docs/M4-TAINT.md) ·
-[`docs/M5-FORKS.md`](docs/M5-FORKS.md)
+[`docs/M5-FORKS.md`](docs/M5-FORKS.md) · [`docs/M6-SURFACE.md`](docs/M6-SURFACE.md)
+
+## Run the flagship in five minutes
+
+One build, one container, and the whole thesis: ingest, a standing query that stays current
+without recomputation, a poisoned source, one taint, and answers that heal themselves. The block
+below is executed **verbatim** by CI (`scripts/run_quickstart.sh`), so it cannot rot. The image
+build is the one slow step (a full Rust workspace, ~15 minutes cold); the five-minute path starts
+at `docker run`. The operator token is a quickstart default — this is a demo container, not a
+deployment.
+
+<!-- quickstart:begin -->
+```bash
+docker build -t mutinydb .
+docker run -d --name mutiny-quickstart -p 7654:7654 mutinydb
+for i in $(seq 1 60); do curl -fsS localhost:7654/v1/quickstart/health >/dev/null 2>&1 && break; sleep 1; done
+
+# Ingest: every write is an enveloped commit that names what it derived from.
+curl -fsS -X POST localhost:7654/v1/quickstart/write -d '{
+  "actor":"analyst","session":"sess-a","branch":"sess-a","intent":"record evt-1",
+  "sources":[{"system":"web","record":"scraped-page-77"}],"table":"telemetry",
+  "rows":[["evt-1","sess-a","urgent credential compromise reported by scraped page",12000000,true,1001]]}'
+curl -fsS -X POST localhost:7654/v1/quickstart/write -d '{
+  "actor":"analyst","session":"sess-a","branch":"sess-a","intent":"record evt-2",
+  "sources":[{"system":"erp","record":"ledger-9"}],"table":"telemetry",
+  "rows":[["evt-2","sess-a","routine ledger reconciliation complete",3000000,false,1002]]}'
+
+# Register a standing query once; it maintains itself forever after.
+HANDLE=$(curl -fsS -X POST localhost:7654/v1/quickstart/sql/register --data \
+  'SELECT telemetry.branch AS branch, SUM(telemetry.cost_micros) AS total_cost, COUNT(*) AS events FROM telemetry GROUP BY telemetry.branch')
+curl -fsS "localhost:7654/v1/quickstart/sql/read?handle=$HANDLE" | grep 15000000
+
+# Watch it stay current: a new commit moves the answer with no re-registration, no recompute.
+curl -fsS -X POST localhost:7654/v1/quickstart/write -d '{
+  "actor":"analyst","session":"sess-a","branch":"sess-a","intent":"record evt-3",
+  "sources":[{"system":"erp","record":"ledger-9"}],"table":"telemetry",
+  "rows":[["evt-3","sess-a","routine settlement complete",2000000,false,1003]]}'
+curl -fsS "localhost:7654/v1/quickstart/sql/read?handle=$HANDLE" | grep 17000000
+
+# The scraped page turns out to be a lie. One taint; the report leads with what cannot be undone.
+curl -fsS -X POST -H "Authorization: Bearer quickstart-operator" localhost:7654/v1/quickstart/taint \
+  -d '{"system":"web","record":"scraped-page-77"}' | grep "ALREADY HEALED"
+
+# The standing answer healed itself: the poisoned 12000000 is gone, the clean 5000000 remains.
+curl -fsS "localhost:7654/v1/quickstart/sql/read?handle=$HANDLE" | grep 5000000
+
+docker rm -f mutiny-quickstart
+```
+<!-- quickstart:end -->
 
 ## Status — what is and is not ready
 
 **Not approved for production. Not a software release candidate.**
 
-Still open, named rather than implied: a supported `mutinyd` binary (M6), fleet operation (M7),
-external assurance and production approval (M8) — and O(1) fork of live answers, which MD-5
-deliberately moved post-v1 with its spike evidence on record. Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
+Still open, named rather than implied: fleet operation (M7); external assurance, release
+admission, and the *supported* status of `mutinyd` (M8 — the binary exists and is gated, but
+every component it links is release-quarantined, so it is not yet a distributable artifact); and
+O(1) fork of live answers, which MD-5 deliberately moved post-v1 with its spike evidence on
+record. Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
 PrismDB's admission requires a release and a live KMS receipt. The roadmap runs on exit gates, not
 dates.
 
 | Phase | M1 bridge | M2 semantic | M3 trust | M4 taint | M5 forks | M6 mutinyd | M7 fleet | M8 release |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | ✅ | ✅ | ✅ | ✅ | ✅ | ◎ | ◎ | ◎ |
+| | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◎ | ◎ |
 
 ## The evidence culture
 
