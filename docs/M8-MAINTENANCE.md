@@ -61,6 +61,19 @@ The same sequence (minus the policy trigger) runs at **sleep**, so a sleeping te
 bounded too: sleep = drain → compact → plane checkpoint → prune → collapse → WAL checkpoint →
 GC → close.
 
+7. **The binary's allocator** (`S7`) — not a pass step but a property the passes rely on. The
+   engine's compaction materializes the full live state transiently each pass (its design, its
+   track), and glibc keeps those freed arena pages resident: the first post-fix nightly
+   measured resident ≈ 5× live data from exactly this, while macOS's `footprint` — which does
+   not count clean reclaimable pages — showed the same process flat. The obvious fix
+   (`malloc_trim` at the drain point) is FFI, and this workspace **forbids unsafe, stated
+   before code** — so the supported binary instead pins an allocator that purges freed pages
+   back to the OS (`#[global_allocator]` mimalloc — safe code, and a stronger property:
+   resident tracks live data continuously, not only at maintenance ticks). The instrument
+   stays honest by construction: an allocator can only return *freed* memory, so a genuine
+   leak still fires the soak's residual gate. No crash seam is added — the allocator holds no
+   durable state.
+
 ## The policy
 
 `maintenance_every` — maintenance triggers when `commit_seq − last_maintained ≥ N`. The default

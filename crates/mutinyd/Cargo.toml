@@ -12,6 +12,11 @@ publish = false
 description = "MutinyDB's one surface: SQL, typed, and MCP doors over one admission boundary."
 
 [dependencies]
+# The supported binary's allocator (docs/M8-MAINTENANCE.md S7): glibc keeps freed arena pages
+# resident (the nightly measured resident ~5x live data from compaction's transient
+# hydrations); mimalloc purges freed pages back to the OS, so resident memory means live data.
+# Safe code only — the workspace forbids unsafe, and #[global_allocator] needs none.
+mimalloc = { version = "0.1", default-features = false }
 loom-action.workspace = true
 loom-branch.workspace = true
 loom-core.workspace = true
