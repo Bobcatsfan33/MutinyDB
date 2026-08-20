@@ -172,6 +172,11 @@ on the M8 ledger, not silently deferred.
    24,576 B/sleeper bound held.
 4. The **M4 taint gates** re-green, plus the explicit taint-across-maintenance oracle above.
 
-Per the conditional-green rule this session added to the roadmap: this gate is **conditionally
-green until the nightly run reports**, and the phase record cites the run link, not the
-dispatch.
+Per the conditional-green rule this session added to the roadmap, this gate was conditionally
+green until the nightly reported. **It has reported. The run of record:**
+<https://github.com/Bobcatsfan33/MutinyDB/actions/runs/32425900512> — soak green at the full
+window (`43,392 writes · 2,711 taints · residual thirds 50,679/75,460/91,062 KiB (1.21×) ·
+peak 142,056 KiB`, and `storage bound: 1 manifests (85 B), 1 pages (385 B)`), the 1,000-SIGKILL
+matrix green (third consecutive full-matrix pass under the new recovery semantics), and the
+10,000-tenant fleet sim green under its cgroup ceiling. The first green nightly soak in this
+repository's history.
