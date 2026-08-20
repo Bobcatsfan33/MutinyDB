@@ -148,8 +148,14 @@ blocked component marked admitted. That distinction is enforced, not editorial.
   has no execute and no taint by construction. Reliability at the composed level: a real
   SIGKILL matrix under concurrent ingest+query+subscribe+taint load (1,000 kills nightly,
   exactly-once, no double epoch to subscribers, recovery equals the never-crashed twin) and a
-  soak whose memory stays flat in shape and budget with taint-as-retraction as the boundedness
-  mechanism. The quickstart below runs verbatim in CI. `mutinyd` remains the
+  soak gating memory flat in shape and budget with taint-as-retraction as the boundedness
+  mechanism. **Correction (issue #12):** the flat-memory claim as originally stated here was
+  true at PR scale (25 s) and **falsified at the nightly window (1,500 s) by the first nightly
+  ever run** — capture-history storage grows O(commits) while a tenant is awake, because
+  nothing compacted it. The finding is preserved in
+  [#12](https://github.com/Bobcatsfan33/MutinyDB/issues/12); the M8 maintenance work closes it,
+  and the soak stayed red — deliberately — until it did. The quickstart below runs verbatim in
+  CI. `mutinyd` remains the
   composed-development form of the binary — the quarantine notice in
   [`docs/M6-SURFACE.md`](docs/M6-SURFACE.md) governs until M8.
 
