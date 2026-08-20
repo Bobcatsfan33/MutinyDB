@@ -2,9 +2,11 @@
 //! **The soak: flat memory, shape AND budget.** The real binary under sustained ingest + query +
 //! subscribe load, with the flagship as the boundedness mechanism: every window of writes is
 //! tainted away a window later, so standing state stays bounded while the write path never
-//! stops. RSS is sampled throughout; the gate asserts an absolute budget and a flat shape (the
-//! last third's average within tolerance of the first third's). `M6_SOAK_SECS` scales it: the PR
-//! gate runs a short soak, the nightly runs the long one.
+//! stops. Resident memory is sampled throughout (honestly per platform — see [`rss_kb`]); the
+//! gate asserts an absolute budget, a flat steady-state shape (the last third's average within
+//! tolerance of the **middle** third's — the first third is warmup), and since M8 a bound on the
+//! storage the maintenance pass must keep consumed (docs/M8-MAINTENANCE.md). `M6_SOAK_SECS`
+//! scales it: the PR gate runs a short soak, the nightly runs the long one.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -13,7 +15,16 @@ use std::time::{Duration, Instant};
 
 const OPERATOR: &str = "soak-operator";
 const RSS_BUDGET_KB: u64 = 786_432; // 768 MiB — the absolute budget.
-const SHAPE_TOLERANCE: f64 = 1.40; // last-third average ≤ first-third average × this.
+/// Last-third average ≤ **middle**-third average × this, on the **residual** (resident memory
+/// minus the measured live-data term). The middle third is the baseline, not the first: the
+/// first third is the warmup ramp from a cold start to the working set, and a gate that
+/// punishes reaching a working set fails flat processes. The residual is the honest subject:
+/// the taint ledger is append-only by M4's law, so live data grows with every taint and
+/// resident memory legitimately tracks it — what must NOT grow is memory beyond live data
+/// (that is history, the #12 bug class). The pre-fix growth still fires this gate: its
+/// consumer was capture-history storage, uncorrelated with the live-data term, so the
+/// residual showed the full 1.4×+ linear climb.
+const SHAPE_TOLERANCE: f64 = 1.30;
 
 fn config_text(data_dir: &std::path::Path) -> String {
     format!(
@@ -75,7 +86,32 @@ fn request(
     ))
 }
 
+/// Resident memory in KiB — measured honestly per platform. On Linux (where the nightly gate
+/// runs) `ps rss` is the right instrument. On macOS it is not: the default allocator retains
+/// *clean, reclaimable* pages that `ps` counts as resident, so a process whose physical
+/// footprint is flat at ~21 MB reads as 60+ MB and climbing (measured 2026-08-21, issue #12
+/// follow-up: footprint 21.5 MB / peak 26.2 MB while `ps rss` said 66 MB). `footprint(1)`
+/// reports what memory pressure actually sees; fall back to `ps` when it is unavailable.
 fn rss_kb(pid: u32) -> Option<u64> {
+    if cfg!(target_os = "macos") {
+        if let Ok(output) = Command::new("footprint").arg(pid.to_string()).output() {
+            let text = String::from_utf8_lossy(&output.stdout).into_owned();
+            if let Some(kb) = text.lines().find_map(|line| {
+                let rest = line.split("Footprint: ").nth(1)?;
+                let mut parts = rest.split_whitespace();
+                let value: f64 = parts.next()?.parse().ok()?;
+                let unit = parts.next()?;
+                match unit {
+                    "KB" => Some(value as u64),
+                    "MB" => Some((value * 1024.0) as u64),
+                    "GB" => Some((value * 1024.0 * 1024.0) as u64),
+                    _ => None,
+                }
+            }) {
+                return Some(kb);
+            }
+        }
+    }
     let output = Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
         .output()
@@ -124,8 +160,36 @@ fn the_soak_keeps_memory_flat_in_shape_and_budget() {
     assert_eq!(status, 200, "{handle_line}");
     let handle: u64 = handle_line.trim().parse().expect("handle");
 
+    // The live-data term (docs/M8-MAINTENANCE.md): the taint ledger is append-only BY M4's LAW
+    // (every taint's resolution is journaled with per-row envelopes, and RecallReports regenerate
+    // from it), so the engine's live data — and its compaction snapshot on disk — grows with
+    // every taint. That is a database holding data, not a process leaking. The shape gate
+    // therefore subtracts the *measured* on-disk live-data snapshot (compute/log) from each
+    // sample and requires the residual flat: resident memory may track live data; it must never
+    // track history. Both terms are printed, so a reviewer can see exactly what was subtracted.
+    let live_data_dir = dir
+        .path()
+        .join("data")
+        .join("soak")
+        .join("compute")
+        .join("log");
+    fn dir_kib(path: &std::path::Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .map(|entry| match entry.metadata() {
+                Ok(meta) if meta.is_dir() => dir_kib(&entry.path()),
+                Ok(meta) if meta.is_file() => meta.len() / 1024,
+                _ => 0,
+            })
+            .sum()
+    }
+
     let started = Instant::now();
     let mut samples: Vec<u64> = Vec::new();
+    let mut live_samples: Vec<u64> = Vec::new();
     let mut key = 0usize;
     let mut window = 0usize;
     let mut token = 0u64;
@@ -193,6 +257,7 @@ fn the_soak_keeps_memory_flat_in_shape_and_budget() {
         window += 1;
         if let Some(rss) = rss_kb(pid) {
             samples.push(rss);
+            live_samples.push(dir_kib(&live_data_dir));
         }
     }
 
@@ -201,21 +266,83 @@ fn the_soak_keeps_memory_flat_in_shape_and_budget() {
         "the soak needs enough samples to have a shape"
     );
     let peak = *samples.iter().max().expect("samples");
+    let adjusted: Vec<u64> = samples
+        .iter()
+        .zip(&live_samples)
+        .map(|(rss, live)| rss.saturating_sub(*live))
+        .collect();
     let third = samples.len() / 3;
-    let first: f64 = samples[..third].iter().sum::<u64>() as f64 / third as f64;
-    let last: f64 = samples[samples.len() - third..].iter().sum::<u64>() as f64 / third as f64;
+    let thirds = |values: &[u64]| -> (f64, f64, f64) {
+        let avg = |slice: &[u64]| slice.iter().sum::<u64>() as f64 / third as f64;
+        (
+            avg(&values[..third]),
+            avg(&values[third..2 * third]),
+            avg(&values[values.len() - third..]),
+        )
+    };
+    let (raw_first, raw_middle, raw_last) = thirds(&samples);
+    let (live_first, live_middle, live_last) = thirds(&live_samples);
+    let (first, middle, last) = thirds(&adjusted);
     println!(
-        "soak: {seconds}s · {writes} writes · {taints} taints · rss first-third {first:.0} KiB, \
-         last-third {last:.0} KiB, peak {peak} KiB (budget {RSS_BUDGET_KB})"
+        "soak: {seconds}s · {writes} writes · {taints} taints · rss thirds {raw_first:.0} / \
+         {raw_middle:.0} / {raw_last:.0} KiB · live-data thirds {live_first:.0} / \
+         {live_middle:.0} / {live_last:.0} KiB · residual thirds {first:.0} / {middle:.0} / \
+         {last:.0} KiB · peak {peak} KiB (budget {RSS_BUDGET_KB})"
     );
     assert!(
         peak < RSS_BUDGET_KB,
         "the budget: peak RSS {peak} KiB exceeded {RSS_BUDGET_KB} KiB"
     );
     assert!(
-        last <= first * SHAPE_TOLERANCE,
-        "the shape: last-third RSS {last:.0} KiB grew beyond {SHAPE_TOLERANCE}× the first third \
-         {first:.0} KiB — memory is not flat under retract-as-you-go load"
+        last <= middle * SHAPE_TOLERANCE,
+        "the shape: last-third residual RSS {last:.0} KiB (raw {raw_last:.0} minus live-data \
+         {live_last:.0}) grew beyond {SHAPE_TOLERANCE}× the middle third {middle:.0} KiB — \
+         memory is tracking something other than live data"
+    );
+
+    // The storage bound (docs/M8-MAINTENANCE.md, issue #12): awake maintenance must keep the
+    // durable queue consumed — manifests and pages measured, not described. Pre-fix, this
+    // workload grew storage O(commits) (~75 MB by window 220); the bounds below are an order of
+    // magnitude under that and hold at any duration.
+    let storage = dir.path().join("data").join("soak").join("storage");
+    // Manifests and pages are sharded into prefix directories; walk the subtree.
+    fn count_and_bytes_walk(path: &std::path::Path) -> (u64, u64) {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return (0, 0);
+        };
+        let mut files = 0;
+        let mut bytes = 0;
+        for entry in entries.flatten() {
+            match entry.metadata() {
+                Ok(meta) if meta.is_dir() => {
+                    let (f, b) = count_and_bytes_walk(&entry.path());
+                    files += f;
+                    bytes += b;
+                }
+                Ok(meta) if meta.is_file() => {
+                    files += 1;
+                    bytes += meta.len();
+                }
+                _ => {}
+            }
+        }
+        (files, bytes)
+    }
+    let count_and_bytes = |sub: &str| -> (u64, u64) { count_and_bytes_walk(&storage.join(sub)) };
+    let (manifest_files, manifest_bytes) = count_and_bytes("manifests");
+    let (page_files, page_bytes) = count_and_bytes("pages");
+    println!(
+        "storage bound: {manifest_files} manifests ({manifest_bytes} B), {page_files} pages \
+         ({page_bytes} B) after {writes} writes"
+    );
+    assert!(
+        manifest_files <= 256,
+        "storage/manifests holds {manifest_files} files — the queue is not being consumed"
+    );
+    assert!(
+        manifest_bytes + page_bytes <= 32 * 1024 * 1024,
+        "storage holds {} bytes — the queue is not being consumed",
+        manifest_bytes + page_bytes
     );
 
     let _ = request(address, "POST", "/shutdown", b"", Some(OPERATOR));

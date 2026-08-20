@@ -244,8 +244,15 @@ docker rm -f mutiny-quickstart
 
 **Not approved for production. Not a software release candidate.**
 
+M8 is **in progress**. Its first item is closed:
+[#12](https://github.com/Bobcatsfan33/MutinyDB/issues/12) — awake tenants now run the
+maintenance pass (engine compact → plane checkpoint → prune the consumed queue → collapse →
+WAL checkpoint → GC, `docs/M8-MAINTENANCE.md`), the crash path is checkpoint-aware with full
+replay of a collapsed store refused by name, and the nightly soak gates the result at the full
+window with storage measured.
+
 Still open, named rather than implied: external assurance, release admission, and the
-*supported* status of `mutinyd` (M8 — the binary exists and is gated, but every component it
+*supported* status of `mutinyd` (the binary exists and is gated, but every component it
 links is release-quarantined, so it is not yet a distributable artifact); the remote object tier
 under the composed store (M8's ledger, see the wake-latency table); and O(1) fork of live
 answers, which MD-5 deliberately moved post-v1 with its spike evidence on record. Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;

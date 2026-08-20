@@ -220,6 +220,21 @@ pub struct TenantPlane {
     membership: BTreeMap<String, BTreeSet<(String, String)>>,
     tenant_dir: std::path::PathBuf,
     compute_dir: std::path::PathBuf,
+    /// The `commit_seq` as of the last maintenance pass (or open), for the worker's policy
+    /// trigger. Deliberately not persisted: after a restart the counter restarts, and the next
+    /// maintenance is at most `maintenance_every` commits away.
+    last_maintained: u64,
+}
+
+/// The crash-injection instrument for the maintenance seams (docs/M8-MAINTENANCE.md): when
+/// `MUTINYD_MAINT_ABORT_AT` names the seam just completed, the process dies **right here**, the
+/// way a SIGKILL would. The kill-matrix gate drives every seam through this deterministically;
+/// production never sets the variable, and a set variable makes the process abort — loudly —
+/// so it cannot be mistaken for a tuning knob.
+fn maintenance_seam(seam: &str) {
+    if std::env::var("MUTINYD_MAINT_ABORT_AT").is_ok_and(|at| at == seam) {
+        std::process::abort();
+    }
 }
 
 /// What `plane-checkpoint.json` holds (docs/M7-FLEET.md): enough to wake in
@@ -232,9 +247,12 @@ struct PlaneCheckpoint {
 }
 
 impl TenantPlane {
-    /// Open the plane and recover it: replay the full capture history idempotently (offer every
-    /// batch, dedup drops what landed, seal what is pending), rebuild branch standing state
-    /// through the fork lineage, then re-apply the taint ledger's heals.
+    /// Open the plane and recover it — **checkpoint-aware since M8** (docs/M8-MAINTENANCE.md):
+    /// a tenant that has ever been maintained or slept holds a plane checkpoint, and recovery
+    /// takes the bounded path (checkpoint + suffix, self-healing when stale). Full capture
+    /// replay remains exactly what it was for a tenant that has neither — and **fails closed by
+    /// name** against a collapsed store, because a consumed queue cannot serve full replay and
+    /// must never be silently partially rebuilt.
     pub fn open(
         data_dir: &Path,
         config: &TenantConfig,
@@ -243,7 +261,22 @@ impl TenantPlane {
         metrics: Arc<Metrics>,
     ) -> Result<TenantPlane, PlaneError> {
         let mut plane = Self::open_shell(data_dir, config, embedding, checkpoint_every, metrics)?;
-        plane.recover()?;
+        if plane.checkpoint_path().exists() {
+            plane.wake_from_checkpoint()?;
+        } else {
+            let head = plane.store.head();
+            if let Some(floor) = mutiny_bridge::collapsed_floor(&plane.store, head)? {
+                return Err(PlaneError::Rejected(format!(
+                    "tenant {:?}: refusing full replay of a collapsed store (history consumed \
+                     through commit {floor}, and plane-checkpoint.json is missing) — a collapsed \
+                     store without its checkpoint is corruption, not an inconvenience \
+                     (docs/M8-MAINTENANCE.md)",
+                    plane.name
+                )));
+            }
+            plane.recover()?;
+        }
+        plane.last_maintained = plane.commit_seq;
         Ok(plane)
     }
 
@@ -259,6 +292,7 @@ impl TenantPlane {
     ) -> Result<TenantPlane, PlaneError> {
         let mut plane = Self::open_shell(data_dir, config, embedding, checkpoint_every, metrics)?;
         plane.wake_from_checkpoint()?;
+        plane.last_maintained = plane.commit_seq;
         Ok(plane)
     }
 
@@ -363,6 +397,7 @@ impl TenantPlane {
             membership: BTreeMap::new(),
             tenant_dir,
             compute_dir,
+            last_maintained: 0,
         };
         Ok(plane)
     }
@@ -442,14 +477,59 @@ impl TenantPlane {
         Ok(())
     }
 
-    /// **Sleep** (docs/M7-FLEET.md): drain is structural (the worker is serial and this runs on
-    /// it), then compact the engine (checkpoint + snapshot + log truncation — the bounded-open
-    /// half), write the plane checkpoint atomically, and drop everything. What remains is bytes
-    /// on the storage backend and the registry row the fleet keeps.
+    /// **Sleep** (docs/M7-FLEET.md, extended at M8): drain is structural (the worker is serial
+    /// and this runs on it), then the full maintenance sequence — compact the engine, write the
+    /// plane checkpoint, prune the consumed queue, collapse and sweep the storage — and drop
+    /// everything. What remains is **bounded** bytes on the storage backend and the registry row
+    /// the fleet keeps.
     pub fn sleep(mut self) -> Result<(), PlaneError> {
-        // Compaction has two benign refusals (nothing sealed yet; already compacted to the
-        // anchor). Sleep checks the preconditions the engine itself states rather than matching
-        // error strings, and always leaves at least a fresh checkpoint behind.
+        self.maintain()?;
+        Ok(())
+    }
+
+    /// **Awake maintenance** (docs/M8-MAINTENANCE.md, issue #12): the M7 sleep-side bounding
+    /// machinery, runnable in place on the worker at a drain point. Steps S1–S6, in the order
+    /// the durability doc proves crash-safe; `MUTINYD_MAINT_ABORT_AT` is the crash-injection
+    /// instrument the kill matrix uses to land a death on every seam deterministically.
+    pub fn maintain(&mut self) -> Result<mutiny_bridge::MaintenanceStats, PlaneError> {
+        self.compact_engine_guarded()?; // S1
+        maintenance_seam("S1");
+        self.write_plane_checkpoint()?; // S2
+        maintenance_seam("S2");
+        let pruned_pages = mutiny_bridge::prune_consumed(&self.store, self.commit_seq)?; // S3
+        maintenance_seam("S3");
+        let collapsed = mutiny_bridge::install_collapsed_root(&self.store)?; // S4
+        maintenance_seam("S4");
+        mutiny_bridge::checkpoint_wal(&self.store)?; // S5
+        maintenance_seam("S5");
+        let (manifests_swept, pages_swept) = mutiny_bridge::sweep(&self.store)?; // S6
+        maintenance_seam("S6");
+        let stats = mutiny_bridge::MaintenanceStats {
+            pruned_pages,
+            collapsed,
+            manifests_swept,
+            pages_swept,
+        };
+        self.last_maintained = self.commit_seq;
+        self.metrics.inc("mutiny_maintenance_total");
+        Ok(stats)
+    }
+
+    /// How many commits have landed since the last maintenance pass (or open) — the worker's
+    /// policy input.
+    pub fn commits_since_maintenance(&self) -> u64 {
+        self.commit_seq.saturating_sub(self.last_maintained)
+    }
+
+    /// The tenant's maintenance policy (docs/M8-MAINTENANCE.md); `0` disables.
+    pub fn maintenance_every(&self) -> u64 {
+        self.config.maintenance_every
+    }
+
+    /// Compaction has two benign refusals (nothing sealed yet; already compacted to the
+    /// anchor). The preconditions the engine itself states are checked rather than matching
+    /// error strings, and at least a fresh checkpoint is always left behind.
+    fn compact_engine_guarded(&mut self) -> Result<(), PlaneError> {
         let epoch = self.engine.epoch();
         let retained_from = self
             .engine
@@ -467,6 +547,12 @@ impl TenantPlane {
         } else {
             self.engine.checkpoint()?;
         }
+        Ok(())
+    }
+
+    /// The M7 plane checkpoint, written atomically: `commit_seq`, fork lineage, and the
+    /// standing-state membership — never serialized operator state.
+    fn write_plane_checkpoint(&self) -> Result<(), PlaneError> {
         let checkpoint = PlaneCheckpoint {
             commit_seq: self.commit_seq,
             lineage: self

@@ -86,6 +86,45 @@ fn tenant_config(name: &str) -> String {
     )
 }
 
+/// A tenant with an explicit maintenance policy (`0` disables — the dev knob that preserves the
+/// full-capture-history crash path this gate uses as its baseline; docs/M8-MAINTENANCE.md).
+fn tenant_config_every(name: &str, maintenance_every: u64) -> String {
+    let base = tenant_config(name);
+    base.replacen(
+        "\"quota\"",
+        &format!("\"maintenance_every\": {maintenance_every}, \"quota\""),
+        1,
+    )
+}
+
+fn config_json_blocks(data_dir: &std::path::Path, blocks: &[String]) -> String {
+    format!(
+        r#"{{
+  "listen": "127.0.0.1:0",
+  "operator_token": "{OPERATOR}",
+  "data_dir": {data_dir},
+  "embedding": {{"dim": 16, "version": "m4-v1"}},
+  "tenants": [{tenants}]
+}}"#,
+        data_dir = serde_json::json!(data_dir),
+        tenants = blocks.join(",")
+    )
+}
+
+fn start_blocks(blocks: &[String]) -> World {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = Config::from_json(&config_json_blocks(dir.path(), blocks)).expect("config");
+    let server = MutinyServer::bind(&config).expect("binds");
+    let address = server.address().expect("address");
+    std::thread::spawn(move || {
+        let _ = server.serve();
+    });
+    World {
+        dir,
+        http: Http { address },
+    }
+}
+
 fn config_json(data_dir: &std::path::Path, tenants: &[&str]) -> String {
     let blocks: Vec<String> = tenants.iter().map(|name| tenant_config(name)).collect();
     format!(
@@ -162,12 +201,18 @@ fn sleep_tenant(http: &Http, tenant: &str) -> String {
 fn bounded_wake_beats_full_replay_and_matches_the_never_slept_twin() {
     let world = start(&["sleeper"]);
     let twin_world = start(&["sleeper"]);
+    // The full-replay baseline (M8 changed recovery semantics, docs/M8-MAINTENANCE.md): a tenant
+    // that has never been maintained and never slept is the only shape full replay still serves,
+    // so the baseline is built with maintenance disabled and measured from a quiescent copy —
+    // exactly the crash image a SIGKILL would leave.
+    let replay_world = start_blocks(&[tenant_config_every("sleeper", 0)]);
     let http = &world.http;
     let twin = &twin_world.http;
+    let replayer = &replay_world.http;
 
     // A long history: 8 source windows x 15 writes, each window tainted away — so the capture
     // history is ~128 commits while the current state is one window.
-    for target in [http, twin] {
+    for target in [http, twin, replayer] {
         for window in 0..8 {
             for event in 0..15 {
                 write_event(
@@ -236,13 +281,15 @@ fn bounded_wake_beats_full_replay_and_matches_the_never_slept_twin() {
         dim: 16,
         version: "m4-v1".to_owned(),
     };
-    let copy_for = |suffix: &str| {
-        let copy = world.dir.path().join(format!("copy-{suffix}"));
-        std::fs::create_dir_all(&copy).expect("copy dir");
-        copy_dir(&world.dir.path().join("sleeper"), &copy.join("sleeper"));
-        copy
-    };
-    let full_dir = copy_for("full");
+    // The baseline copy comes from the never-maintained tenant while it is quiescent — a
+    // crash-consistent image (every commit is fsync'd), with no plane checkpoint, so open()
+    // takes the true full-replay crash path.
+    let full_dir = world.dir.path().join("copy-full");
+    std::fs::create_dir_all(&full_dir).expect("copy dir");
+    copy_dir(
+        &replay_world.dir.path().join("sleeper"),
+        &full_dir.join("sleeper"),
+    );
     let started = Instant::now();
     let full = TenantPlane::open(
         &full_dir,
@@ -255,6 +302,12 @@ fn bounded_wake_beats_full_replay_and_matches_the_never_slept_twin() {
     let full_replay = started.elapsed();
     drop(full);
 
+    let copy_for = |suffix: &str| {
+        let copy = world.dir.path().join(format!("copy-{suffix}"));
+        std::fs::create_dir_all(&copy).expect("copy dir");
+        copy_dir(&world.dir.path().join("sleeper"), &copy.join("sleeper"));
+        copy
+    };
     let wake_dir = copy_for("wake");
     let started = Instant::now();
     let woken = TenantPlane::wake(

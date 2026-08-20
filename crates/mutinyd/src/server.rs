@@ -829,6 +829,26 @@ fn worker(plane: TenantPlane, receiver: Receiver<Job>, tenant: &str, metrics: &A
                     live.engine_epoch() as i64,
                 );
                 let _ = reply.send(result);
+                // Awake maintenance (docs/M8-MAINTENANCE.md): the worker IS the drain point —
+                // the reply is sent, no job is in flight, and the single writer runs the pass.
+                // Never in a commit/read path; strictly between jobs.
+                let every = live.maintenance_every();
+                if every > 0 && live.commits_since_maintenance() >= every {
+                    match live.maintain() {
+                        Ok(stats) => metrics.gauge(
+                            &format!("mutiny_maintenance_pages_swept{{tenant=\"{tenant}\"}}"),
+                            stats.pages_swept as i64,
+                        ),
+                        Err(error) => {
+                            // A failed pass leaves the store exactly as durable as before the
+                            // pass began (every seam is crash-safe); surface it, do not die.
+                            metrics.inc(&format!(
+                                "mutiny_maintenance_failed_total{{tenant=\"{tenant}\"}}"
+                            ));
+                            eprintln!("maintenance failed for tenant {tenant}: {error}");
+                        }
+                    }
+                }
             }
             Job::Mcp { request, reply } => {
                 let response = crate::mcp::handle(live, &request);
