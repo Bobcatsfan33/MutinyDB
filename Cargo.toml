@@ -26,6 +26,7 @@
 #   M4  crates/mutiny-incident       the frozen incident corpus, gate, and dev-only demo host
 #   M5  crates/mutiny-forks          forked standing state: spike evidence + fork lineage (K-3)
 #   M6  crates/mutinyd               the one process, the three doors (composed-development form)
+#   M7  (in mutinyd)                 the fleet plane: registry, sleep/wake, wake-on-delta
 # Nothing may be added ahead of its phase. (§6: "no phase starts before its named gates".)
 [workspace]
 resolver = "3"
@@ -58,7 +59,9 @@ loom-policy = { path = "components/loomdb/crates/loom-policy" }
 prism-types = { path = "components/prismdb/crates/prism-types" }
 schweep-log = { path = "components/schweep/crates/schweep-log" }
 schweep-memo = { path = "components/schweep/crates/schweep-memo" }
+schweep-plan = { path = "components/schweep/crates/schweep-plan" }
 schweep-server = { path = "components/schweep/crates/schweep-server" }
+schweep-sql = { path = "components/schweep/crates/schweep-sql" }
 schweep-zset = { path = "components/schweep/crates/schweep-zset" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

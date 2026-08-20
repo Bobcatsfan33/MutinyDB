@@ -49,6 +49,10 @@ ALLOWED_COMPONENT_EDGES = {
     # M6: mutinyd is the one surface — the composed-development form of the product binary
     # (docs/M6-SURFACE.md's quarantine notice governs its distribution). It composes every plane
     # behind one admission boundary, which is why its reviewed edge set is the union.
+    # M7 adds schweep-plan + schweep-sql: the fleet's delta->circuit mapping is an OBSERVATION —
+    # the engine's persisted registration file read back through the compute plane's public
+    # binder, never compute calling the registry (MD-1 R2's anticipated inversion, recorded in
+    # docs/M7-FLEET.md).
     "mutinyd": {
         "loom-action",
         "loom-branch",
@@ -57,7 +61,9 @@ ALLOWED_COMPONENT_EDGES = {
         "prism-types",
         "schweep-log",
         "schweep-memo",
+        "schweep-plan",
         "schweep-server",
+        "schweep-sql",
         "schweep-zset",
         "substrate-pager",
         "substrate-wal",

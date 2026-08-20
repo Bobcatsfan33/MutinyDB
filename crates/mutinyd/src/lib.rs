@@ -4,6 +4,7 @@
 //! composed-development form of the product binary; it becomes a supported artifact only at M8.
 
 pub mod config;
+pub mod fleet;
 pub mod mcp;
 pub mod metrics;
 pub mod plane;

@@ -227,6 +227,20 @@ jobs:
       - name: Run exactly what the README tells a stranger to run
         run: ./scripts/run_quickstart.sh
 
+  m7-fleet:
+    name: M7 fleet plane — bounded wake, selectivity, taint x sleep, teeth, sim smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Prove the fleet gate (registry, bounded wake, wake-on-delta, teeth a/b/c)
+        run: cargo test -p mutinyd --locked --test m7_gate -- --nocapture
+      - name: Prove the fleet simulation at PR scale (the 10k run is nightly, under a cgroup)
+        run: M7_SIM_TENANTS=120 cargo test -p mutinyd --locked --test m7_fleet_sim -- --nocapture
+
   no-egress:
     name: no-egress
     runs-on: ubuntu-latest
@@ -280,7 +294,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [component-integrity, component-compatibility, fmt, clippy, test, m1-bridge, m2-semantic, m3-trust, m4-taint, m5-forks, m6-surface, m6-quickstart, no-egress]
+    needs: [component-integrity, component-compatibility, fmt, clippy, test, m1-bridge, m2-semantic, m3-trust, m4-taint, m5-forks, m6-surface, m6-quickstart, m7-fleet, no-egress]
     if: always()
     steps:
       - name: Fail if any job did not succeed
