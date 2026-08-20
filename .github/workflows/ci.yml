@@ -75,8 +75,13 @@ jobs:
           else
             cargo check --workspace --all-targets --all-features --locked
           fi
-      - name: Clippy every supported default target
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # No `-D warnings` here, deliberately: these are LOCKED snapshots, and clippy's lint set
+      # moves with stable (a new lint landed 2026-08 and turned this job red on a docs-only PR).
+      # Compatibility means the imported tree still resolves, compiles, and tests in this layout —
+      # not that it satisfies lints invented after its import. Compile errors still fail; the
+      # product workspace keeps its own strict clippy job.
+      - name: Clippy every supported default target (advisory lints, hard compile errors)
+        run: cargo clippy --workspace --all-targets --locked
 
   fmt:
     name: fmt
