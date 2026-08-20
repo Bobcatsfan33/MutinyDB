@@ -61,6 +61,15 @@ The same sequence (minus the policy trigger) runs at **sleep**, so a sleeping te
 bounded too: sleep = drain → compact → plane checkpoint → prune → collapse → WAL checkpoint →
 GC → close.
 
+7. **Allocator trim** (`S7`, Linux only) — `malloc_trim(0)` after the sweep. The engine's
+   compaction materializes the full live state transiently each pass (its design, its track),
+   and glibc keeps the freed arena pages resident: the first post-fix nightly measured resident
+   ≈ 5× live data from exactly this, while macOS's `footprint` — which does not count clean
+   reclaimable pages — showed the same process flat. Handing freed pages back at the drain
+   point is squarely maintenance's job. The instrument stays honest by construction: trim can
+   only release *freed* memory, so a genuine leak is untouched by it and still fires the soak's
+   residual gate. No crash seam is added — trim mutates no durable state.
+
 ## The policy
 
 `maintenance_every` — maintenance triggers when `commit_seq − last_maintained ≥ N`. The default

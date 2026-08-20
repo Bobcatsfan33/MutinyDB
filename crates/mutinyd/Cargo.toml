@@ -40,3 +40,7 @@ tempfile = "3"
 
 [lints]
 workspace = true
+
+# Linux only, maintenance only: malloc_trim at the drain point (docs/M8-MAINTENANCE.md).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
