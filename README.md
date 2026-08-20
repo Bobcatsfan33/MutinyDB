@@ -153,9 +153,38 @@ blocked component marked admitted. That distinction is enforced, not editorial.
   composed-development form of the binary — the quarantine notice in
   [`docs/M6-SURFACE.md`](docs/M6-SURFACE.md) governs until M8.
 
+- **M7 — the fleet plane.** Tenants register, sleep, wake, and are removed **without a
+  restart**, from a durable registry a crashed `mutinyd` recovers. Sleep = drain → compact →
+  checkpoint → close: a sleeping tenant is bytes plus a registry row, with the resident footprint
+  asserted, not described. **Wake is O(checkpoint + suffix), not O(history)** — the plane
+  checkpoint holds standing-state *membership* (every held row is a live engine row, so nothing
+  serialized can drift from the log) — and wakes byte-identical to a never-slept twin.
+  **Wake-on-delta** is selective at both granularities, counter-asserted: a delta wakes its
+  tenant and provably not the others, and within the tenant only the circuits that read its
+  table emit — with the delta→circuit mapping **observed** from the compute plane's own
+  registration file through its public binder (MD-1 R2's inversion, exactly as anticipated).
+  Taint composes across sleep. The fleet simulation puts 10,000 sleeping tenants on one host
+  under a cgroup ceiling and publishes p50/p99 wake-to-first-answer (below).
+
 Details: [`docs/M1-BRIDGE.md`](docs/M1-BRIDGE.md) · [`docs/M2-SEMANTIC.md`](docs/M2-SEMANTIC.md) ·
 [`docs/M3-TRUST.md`](docs/M3-TRUST.md) · [`docs/M4-TAINT.md`](docs/M4-TAINT.md) ·
-[`docs/M5-FORKS.md`](docs/M5-FORKS.md) · [`docs/M6-SURFACE.md`](docs/M6-SURFACE.md)
+[`docs/M5-FORKS.md`](docs/M5-FORKS.md) · [`docs/M6-SURFACE.md`](docs/M6-SURFACE.md) ·
+[`docs/M7-FLEET.md`](docs/M7-FLEET.md)
+
+## Wake latency, honestly
+
+Two different questions, answered separately and labeled:
+
+| Path | Number | Conditions — read them |
+| --- | --- | --- |
+| Composed fleet wake (this repo's sim) | see `crates/mutinyd/evidence/m7-fleet-sim.json` | **same-host, local filesystem**, 10,000 sleeping tenants, cgroup-capped CI runner; wake = engine snapshot+suffix open + membership hydration + first standing answer |
+| Wide-area wake over object storage (the component track) | **≈ 1 RTT at the median** to the object store (Sydney worst case: p50 179 ms at RTT ≈ 226 ms; p99 ~2 RTT) | substrate ≥ v1.5.0: warm-set carried in the sleep token, hydrated in **one coalesced `get_batch`**, keep-alive `WarmPool` — measured on the component's own `wake-latency-widearea.yml`; the honest SLA is *"wake ≈ 1 RTT to your object store"*, so co-locate the object tier in-region |
+
+The roadmap's "known 1020 ms wide-area item" is closed by the second row — on the component
+track, where the machinery lives. The composed `mutinyd` path currently runs local-filesystem
+tenant stores (the imported Loom flavor is air-gapped by this repository's own pinning);
+**wiring `substrate-store`'s remote tier under the composed store is open and named on M8's
+ledger** — it inherits, not re-proves, the ≈1-RTT property. No unqualified latency claim is made.
 
 ## Run the flagship in five minutes
 
@@ -209,17 +238,17 @@ docker rm -f mutiny-quickstart
 
 **Not approved for production. Not a software release candidate.**
 
-Still open, named rather than implied: fleet operation (M7); external assurance, release
-admission, and the *supported* status of `mutinyd` (M8 — the binary exists and is gated, but
-every component it links is release-quarantined, so it is not yet a distributable artifact); and
-O(1) fork of live answers, which MD-5 deliberately moved post-v1 with its spike evidence on
-record. Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
+Still open, named rather than implied: external assurance, release admission, and the
+*supported* status of `mutinyd` (M8 — the binary exists and is gated, but every component it
+links is release-quarantined, so it is not yet a distributable artifact); the remote object tier
+under the composed store (M8's ledger, see the wake-latency table); and O(1) fork of live
+answers, which MD-5 deliberately moved post-v1 with its spike evidence on record. Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
 PrismDB's admission requires a release and a live KMS receipt. The roadmap runs on exit gates, not
 dates.
 
 | Phase | M1 bridge | M2 semantic | M3 trust | M4 taint | M5 forks | M6 mutinyd | M7 fleet | M8 release |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◎ | ◎ |
+| | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◎ |
 
 ## The evidence culture
 

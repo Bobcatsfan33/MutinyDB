@@ -1,7 +1,7 @@
 //! `mutinyd`'s configuration: one JSON file, validated loudly at startup. A server that guesses a
 //! default for a missing tenant field is a server whose behavior nobody configured.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -13,7 +13,7 @@ pub const QUARANTINE_NOTICE: &str = "composed-development build: every linked co
      release-quarantined (components.lock.json); NOT a supported or distributable artifact until \
      M8's release gates clear";
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// `host:port` to bind. Tests use `127.0.0.1:0` and read the bound port.
@@ -33,14 +33,14 @@ fn default_checkpoint_every() -> u64 {
     8
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmbeddingConfig {
     pub dim: usize,
     pub version: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TenantConfig {
     pub name: String,
@@ -55,7 +55,7 @@ pub struct TenantConfig {
     pub connectors: Vec<ConnectorConfig>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaConfig {
     /// Requests admitted per rolling one-second window (Prism's windowed quota discipline).
@@ -76,7 +76,7 @@ impl Default for QuotaConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TableConfig {
     pub name: String,
@@ -91,7 +91,7 @@ pub struct TableConfig {
     pub semantic: Option<SemanticColumnsConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticColumnsConfig {
     pub body_column: String,
@@ -100,7 +100,7 @@ pub struct SemanticColumnsConfig {
     pub error_column: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticStandingConfig {
     #[serde(default)]
@@ -109,7 +109,7 @@ pub struct SemanticStandingConfig {
     pub groups: Vec<GroupsConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TopKConfig {
     pub id: String,
@@ -117,14 +117,14 @@ pub struct TopKConfig {
     pub k: usize,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GroupsConfig {
     pub id: String,
     pub anchors: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectorConfig {
     pub action_type: String,
@@ -168,6 +168,26 @@ impl Config {
         for tenant in &self.tenants {
             if names.insert(tenant.name.clone(), ()).is_some() {
                 return fail(format!("tenant {:?} is declared twice", tenant.name));
+            }
+            validate_tenant(tenant)?;
+        }
+        Ok(())
+    }
+}
+
+/// Per-tenant validation, shared by the static config and the fleet's dynamic registration.
+pub fn validate_tenant(tenant: &TenantConfig) -> Result<(), ConfigError> {
+    let fail = |message: String| Err(ConfigError::Invalid(message));
+    {
+        {
+            if tenant.name.trim().is_empty()
+                || tenant.name.contains('/')
+                || tenant.name.contains("..")
+            {
+                return fail(format!(
+                    "tenant name {:?} is not a safe identifier",
+                    tenant.name
+                ));
             }
             if tenant.tables.is_empty() {
                 return fail(format!("tenant {:?} declares no tables", tenant.name));

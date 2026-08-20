@@ -20,6 +20,25 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       - run: M6_KILLS=1000 cargo test -p mutinyd --locked --release --test m6_kill_matrix -- --nocapture
 
+  fleet-sim-10k:
+    name: nightly 10,000-tenant fleet simulation (cgroup 2 GiB ceiling)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Build the sim first, outside the ceiling
+        run: cargo test -p mutinyd --locked --release --test m7_fleet_sim --no-run
+      - name: Run 10,000 tenants under a 2 GiB cgroup ceiling
+        run: |
+          sudo systemd-run --scope --same-dir -p MemoryMax=2G -p MemorySwapMax=0 \
+            --uid=$(id -u) --gid=$(id -g) \
+            env "PATH=$PATH" "HOME=$HOME" M7_SIM_TENANTS=10000 \
+            cargo test -p mutinyd --locked --release --test m7_fleet_sim -- --nocapture
+
   soak:
     name: nightly soak (mutinyd under load, flat memory)
     runs-on: ubuntu-latest

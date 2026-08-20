@@ -214,6 +214,21 @@ pub struct TenantPlane {
     records: Vec<ActionRecord>,
     proposals: BTreeMap<String, Proposal>,
     metrics: Arc<Metrics>,
+    /// The standing-state membership mirror: branch -> the (table, key) rows its semantic
+    /// operators hold. Every entry corresponds to a live engine row (the M4/M5 invariant), which
+    /// is what makes the plane checkpoint a membership list rather than serialized state.
+    membership: BTreeMap<String, BTreeSet<(String, String)>>,
+    tenant_dir: std::path::PathBuf,
+    compute_dir: std::path::PathBuf,
+}
+
+/// What `plane-checkpoint.json` holds (docs/M7-FLEET.md): enough to wake in
+/// O(checkpoint + suffix) — never serialized operator state that could drift from the log.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PlaneCheckpoint {
+    commit_seq: u64,
+    lineage: Vec<(String, String, u64, String)>,
+    membership: BTreeMap<String, Vec<(String, String)>>,
 }
 
 impl TenantPlane {
@@ -227,8 +242,36 @@ impl TenantPlane {
         checkpoint_every: u64,
         metrics: Arc<Metrics>,
     ) -> Result<TenantPlane, PlaneError> {
-        let storage_dir = data_dir.join(&config.name).join("storage");
-        let compute_dir = data_dir.join(&config.name).join("compute");
+        let mut plane = Self::open_shell(data_dir, config, embedding, checkpoint_every, metrics)?;
+        plane.recover()?;
+        Ok(plane)
+    }
+
+    /// **Bounded wake** (docs/M7-FLEET.md): O(checkpoint + suffix), never O(history). Refuses by
+    /// name if the promised checkpoint is missing — a slept tenant without one is corruption,
+    /// not an inconvenience; the full-replay path stays reserved for crashed-while-awake tenants.
+    pub fn wake(
+        data_dir: &Path,
+        config: &TenantConfig,
+        embedding: &EmbeddingConfig,
+        checkpoint_every: u64,
+        metrics: Arc<Metrics>,
+    ) -> Result<TenantPlane, PlaneError> {
+        let mut plane = Self::open_shell(data_dir, config, embedding, checkpoint_every, metrics)?;
+        plane.wake_from_checkpoint()?;
+        Ok(plane)
+    }
+
+    fn open_shell(
+        data_dir: &Path,
+        config: &TenantConfig,
+        embedding: &EmbeddingConfig,
+        checkpoint_every: u64,
+        metrics: Arc<Metrics>,
+    ) -> Result<TenantPlane, PlaneError> {
+        let tenant_dir = data_dir.join(&config.name);
+        let storage_dir = tenant_dir.join("storage");
+        let compute_dir = tenant_dir.join("compute");
         std::fs::create_dir_all(&storage_dir).map_err(|e| PlaneError::Storage(e.to_string()))?;
 
         let store = substrate_wal::DurableStore::open(
@@ -301,7 +344,7 @@ impl TenantPlane {
             )?;
         }
 
-        let mut plane = TenantPlane {
+        let plane = TenantPlane {
             name: config.name.clone(),
             config: config.clone(),
             embedding: embedding.clone(),
@@ -317,8 +360,10 @@ impl TenantPlane {
             records: Vec::new(),
             proposals: BTreeMap::new(),
             metrics,
+            membership: BTreeMap::new(),
+            tenant_dir,
+            compute_dir,
         };
-        plane.recover()?;
         Ok(plane)
     }
 
@@ -350,14 +395,21 @@ impl TenantPlane {
                 } else if let Some(spec) = self.semantic_spec(table) {
                     for change in &captured.changes {
                         let delta = self.semantic_delta(&spec, &change.row, change.weight)?;
-                        self.apply_semantic(&branch, delta)?;
+                        let key = delta.record.key.clone();
+                        self.apply_semantic(&branch, table, &key, delta)?;
                     }
                 }
             }
             self.commit_seq = capture.commit_seq;
         }
 
-        // The taint ledger's heals are engine-native epochs the capture history never saw.
+        self.apply_ledger_heals()
+    }
+
+    /// Re-apply every heal the taint ledger records — engine-native epochs the capture history
+    /// never saw. Idempotent by construction (retract-by-key, skip-absent), so both recovery
+    /// paths apply them all.
+    fn apply_ledger_heals(&mut self) -> Result<(), PlaneError> {
         let ledger_sql = format!(
             "SELECT {t}.branch AS branch, {t}.table_name AS table_name, {t}.row_key AS row_key \
              FROM {t}",
@@ -365,6 +417,7 @@ impl TenantPlane {
         );
         let healed = self.table_rows(&ledger_sql)?;
         let lineage = self.lineage()?;
+        let semantic_tables = self.semantic_table_names();
         for row in healed {
             let (Some(Value::Str(branch)), Some(Value::Str(table)), Some(Value::Str(row_key))) =
                 (row.get(0), row.get(1), row.get(2))
@@ -379,13 +432,204 @@ impl TenantPlane {
             let mut healer = LineageHealer {
                 operator: &self.operator,
                 lineage: lineage.clone(),
-                semantic_tables: self.semantic_table_names(),
+                semantic_tables: semantic_tables.clone(),
+                membership: &mut self.membership,
             };
             healer
                 .heal(branch, table, &[key])
                 .map_err(PlaneError::Internal)?;
         }
         Ok(())
+    }
+
+    /// **Sleep** (docs/M7-FLEET.md): drain is structural (the worker is serial and this runs on
+    /// it), then compact the engine (checkpoint + snapshot + log truncation — the bounded-open
+    /// half), write the plane checkpoint atomically, and drop everything. What remains is bytes
+    /// on the storage backend and the registry row the fleet keeps.
+    pub fn sleep(mut self) -> Result<(), PlaneError> {
+        // Compaction has two benign refusals (nothing sealed yet; already compacted to the
+        // anchor). Sleep checks the preconditions the engine itself states rather than matching
+        // error strings, and always leaves at least a fresh checkpoint behind.
+        let epoch = self.engine.epoch();
+        let retained_from = self
+            .engine
+            .health()
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("retained_from ")?
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })
+            .unwrap_or(0);
+        if epoch > 0 && epoch > retained_from {
+            self.engine.compact()?;
+        } else {
+            self.engine.checkpoint()?;
+        }
+        let checkpoint = PlaneCheckpoint {
+            commit_seq: self.commit_seq,
+            lineage: self
+                .lineage_events
+                .iter()
+                .map(|event| {
+                    (
+                        event.child.clone(),
+                        event.parent.clone(),
+                        event.at_epoch,
+                        event.kind.as_str().to_owned(),
+                    )
+                })
+                .collect(),
+            membership: self
+                .membership
+                .iter()
+                .map(|(branch, keys)| (branch.clone(), keys.iter().cloned().collect()))
+                .collect(),
+        };
+        let text = serde_json::to_string_pretty(&checkpoint)
+            .map_err(|e| PlaneError::Internal(e.to_string()))?;
+        let path = self.checkpoint_path();
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text).map_err(|e| PlaneError::Storage(e.to_string()))?;
+        std::fs::rename(&tmp, &path).map_err(|e| PlaneError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    fn checkpoint_path(&self) -> std::path::PathBuf {
+        self.tenant_dir.join("plane-checkpoint.json")
+    }
+
+    /// The bounded half of [`TenantPlane::wake`]: checkpoint + current rows + suffix + heals.
+    fn wake_from_checkpoint(&mut self) -> Result<(), PlaneError> {
+        let path = self.checkpoint_path();
+        let text = std::fs::read_to_string(&path).map_err(|_| {
+            PlaneError::Rejected(format!(
+                "tenant {:?} was slept with a checkpoint the contract promised, and {} is \
+                 missing: refusing the wake rather than guessing (docs/M7-FLEET.md)",
+                self.name,
+                path.display()
+            ))
+        })?;
+        let checkpoint: PlaneCheckpoint =
+            serde_json::from_str(&text).map_err(|e| PlaneError::Internal(e.to_string()))?;
+
+        self.commit_seq = checkpoint.commit_seq;
+        self.lineage_events = checkpoint
+            .lineage
+            .iter()
+            .map(|(child, parent, at_epoch, kind)| {
+                Ok(ForkEvent {
+                    child: child.clone(),
+                    parent: parent.clone(),
+                    at_epoch: *at_epoch,
+                    kind: ForkKind::parse(kind).ok_or_else(|| {
+                        PlaneError::Internal(format!("unknown lineage kind {kind:?}"))
+                    })?,
+                })
+            })
+            .collect::<Result<Vec<_>, PlaneError>>()?;
+
+        // Current rows per semantic table, one bounded read each (the engine opened from its
+        // snapshot + suffix, so this is O(current data)).
+        let mut rows_by_table: BTreeMap<String, BTreeMap<String, Row>> = BTreeMap::new();
+        for table in self.semantic_table_names() {
+            let Some(spec) = self.semantic_spec(&table) else {
+                continue;
+            };
+            let config = self
+                .table_config(&table)
+                .ok_or_else(|| PlaneError::Internal(format!("no config for {table:?}")))?
+                .clone();
+            let projection = config
+                .columns
+                .iter()
+                .map(|(name, _)| format!("{table}.{name} AS {name}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rows = self.table_rows(&format!("SELECT {projection} FROM {table}"))?;
+            let mut by_key = BTreeMap::new();
+            for row in rows {
+                if let Some(Value::Str(key)) = row.get(spec.key) {
+                    by_key.insert(key.clone(), row);
+                }
+            }
+            rows_by_table.insert(table, by_key);
+        }
+
+        // Rebuild every branch's standing stores from membership x current rows.
+        let membership: Vec<(String, Vec<(String, String)>)> = checkpoint
+            .membership
+            .iter()
+            .map(|(branch, keys)| (branch.clone(), keys.clone()))
+            .collect();
+        for (branch, held) in membership {
+            self.session_open(&branch)?;
+            for (table, key) in held {
+                let Some(spec) = self.semantic_spec(&table) else {
+                    continue;
+                };
+                let row = rows_by_table
+                    .get(&table)
+                    .and_then(|by_key| by_key.get(&key))
+                    .cloned()
+                    .ok_or_else(|| {
+                        PlaneError::Internal(format!(
+                            "checkpoint names {branch}/{table}/{key}, but no live engine row \
+                             backs it — the membership invariant broke"
+                        ))
+                    })?;
+                let delta = self.semantic_delta(&spec, &row, 1)?;
+                self.apply_semantic(&branch, &table, &key, delta)?;
+            }
+        }
+
+        // The suffix: captures after the checkpoint (a fresh sleep leaves none; a stale
+        // checkpoint self-heals from here).
+        let head = self.store.head();
+        let captures = recover_pending_captures(&self.store, head, checkpoint.commit_seq)?;
+        for capture in &captures {
+            self.authority.register(EnvelopeId::of(&capture.envelope));
+            self.apply_capture(capture)?;
+            let branch = capture.branch.as_str().to_owned();
+            if !self.tokens.contains_key(&branch) {
+                self.session_open(&branch)?;
+            }
+            for (table, captured) in &capture.tables {
+                if table == FORKS_TABLE {
+                    for change in &captured.changes {
+                        let event = ForkEvent::from_row(&change.row)?;
+                        match event.kind {
+                            ForkKind::Fork => self.hydrate_fork(&event)?,
+                            ForkKind::Rewind => {
+                                self.operator
+                                    .rewind_branch(&BranchId::new(event.child.as_str()))?;
+                                self.tokens.remove(&event.child);
+                                self.membership.remove(&event.child);
+                                self.lineage_events.push(event);
+                            }
+                        }
+                    }
+                } else if let Some(spec) = self.semantic_spec(table) {
+                    for change in &captured.changes {
+                        let delta = self.semantic_delta(&spec, &change.row, change.weight)?;
+                        let key = delta.record.key.clone();
+                        self.apply_semantic(&branch, table, &key, delta)?;
+                    }
+                }
+            }
+            self.commit_seq = capture.commit_seq;
+        }
+
+        self.apply_ledger_heals()
+    }
+
+    /// **The delta->circuit mapping, observed from the compute plane** (MD-1 R2's anticipated
+    /// inversion, recorded in docs/M7-FLEET.md): the engine's own persisted registration file is
+    /// read, each SQL text is bound through the compute plane's public binder, and the bound
+    /// source tree names the tables. Compute never calls the fleet; the fleet observes.
+    pub fn circuit_mapping(&self) -> Result<BTreeMap<String, BTreeSet<String>>, PlaneError> {
+        circuit_mapping_for(&self.compute_dir, &self.config)
     }
 
     // ---- sessions and branches -----------------------------------------------------------------
@@ -447,6 +691,7 @@ impl TenantPlane {
         }
         let freed = self.operator.rewind_branch(&BranchId::new(child))?;
         self.tokens.remove(child);
+        self.membership.remove(child);
         Ok(freed)
     }
 
@@ -688,7 +933,8 @@ impl TenantPlane {
         if let Some(semantic) = self.semantic_spec(table) {
             for row in &rows {
                 let delta = self.semantic_delta(&semantic, row, 1)?;
-                self.apply_semantic(branch, delta)?;
+                let key = delta.record.key.clone();
+                self.apply_semantic(branch, table, &key, delta)?;
             }
         }
         Ok(WriteReceipt {
@@ -789,6 +1035,12 @@ impl TenantPlane {
             )));
         }
         self.tokens.insert(event.child.clone(), token);
+        let inherited = self
+            .membership
+            .get(&event.parent)
+            .cloned()
+            .unwrap_or_default();
+        self.membership.insert(event.child.clone(), inherited);
         self.lineage_events.push(event.clone());
         Ok(())
     }
@@ -964,10 +1216,12 @@ impl TenantPlane {
             .collect();
         let taint_config = self.taint_config();
         let lineage = self.lineage()?;
+        let semantic_tables = self.semantic_table_names();
         let mut healer = LineageHealer {
             operator: &self.operator,
             lineage,
-            semantic_tables: self.semantic_table_names(),
+            semantic_tables,
+            membership: &mut self.membership,
         };
         let outcome = mutiny_taint::taint(
             &mut self.engine,
@@ -1103,7 +1357,17 @@ impl TenantPlane {
         Ok(SemanticDelta { record, weight })
     }
 
-    fn apply_semantic(&self, branch: &str, delta: SemanticDelta) -> Result<(), PlaneError> {
+    fn apply_semantic(
+        &mut self,
+        branch: &str,
+        table: &str,
+        key: &str,
+        delta: SemanticDelta,
+    ) -> Result<(), PlaneError> {
+        self.membership
+            .entry(branch.to_owned())
+            .or_default()
+            .insert((table.to_owned(), key.to_owned()));
         let token = self
             .tokens
             .get(branch)
@@ -1176,6 +1440,9 @@ struct LineageHealer<'a> {
     operator: &'a OperatorTrustPlane,
     lineage: Lineage,
     semantic_tables: BTreeSet<String>,
+    /// The plane's membership mirror: a heal removes what it retracted, on every holding branch,
+    /// so the sleep checkpoint never records a row the stores no longer hold.
+    membership: &'a mut BTreeMap<String, BTreeSet<(String, String)>>,
 }
 
 impl SemanticHealer for LineageHealer<'_> {
@@ -1183,15 +1450,19 @@ impl SemanticHealer for LineageHealer<'_> {
         if !self.semantic_tables.contains(table) {
             return Ok(0);
         }
-        let mut healed = self
-            .operator
-            .heal_semantic(&BranchId::new(branch), keys)
-            .map_err(|e| e.to_string())?;
-        for descendant in self.lineage.active_descendants(branch) {
+        let mut branches = vec![branch.to_owned()];
+        branches.extend(self.lineage.active_descendants(branch));
+        let mut healed = 0;
+        for holder in &branches {
             healed += self
                 .operator
-                .heal_semantic(&BranchId::new(descendant.as_str()), keys)
+                .heal_semantic(&BranchId::new(holder.as_str()), keys)
                 .map_err(|e| e.to_string())?;
+            if let Some(held) = self.membership.get_mut(holder) {
+                for key in keys {
+                    held.remove(&(table.to_owned(), key.clone()));
+                }
+            }
         }
         Ok(healed)
     }
@@ -1277,6 +1548,49 @@ fn decode_row(table: &TableConfig, values: &[serde_json::Value]) -> Result<Row, 
         row.push(typed);
     }
     Ok(Row::new(row))
+}
+
+/// The delta->circuit mapping, observed from the compute plane without waking anything: the
+/// engine's persisted registration file plus the public binder (MD-1 R2, docs/M7-FLEET.md).
+pub fn circuit_mapping_for(
+    compute_dir: &Path,
+    config: &TenantConfig,
+) -> Result<BTreeMap<String, BTreeSet<String>>, PlaneError> {
+    let mut mapping: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let registry = schweep_server::Registry::load(compute_dir)?;
+    let catalog = build_catalog(config)?;
+    for entry in registry.entries.values() {
+        let bound = schweep_sql::bind_sql(&entry.sql, &catalog)
+            .map_err(|e| PlaneError::Internal(format!("registered SQL failed to bind: {e}")))?;
+        let mut tables = BTreeSet::new();
+        collect_tables(&bound.query.source, &mut tables);
+        mapping.insert(format!("handle-{}", entry.handle), tables);
+    }
+    let semantic_tables: BTreeSet<String> = config
+        .tables
+        .iter()
+        .filter(|t| t.semantic.is_some())
+        .map(|t| t.name.clone())
+        .collect();
+    for topk in &config.semantic_standing.topk {
+        mapping.insert(format!("semantic-{}", topk.id), semantic_tables.clone());
+    }
+    for groups in &config.semantic_standing.groups {
+        mapping.insert(format!("groups-{}", groups.id), semantic_tables.clone());
+    }
+    Ok(mapping)
+}
+
+fn collect_tables(source: &schweep_plan::Source, out: &mut BTreeSet<String>) {
+    match source {
+        schweep_plan::Source::Scan { table, .. } => {
+            out.insert(table.clone());
+        }
+        schweep_plan::Source::Join { left, right, .. } => {
+            collect_tables(left, out);
+            collect_tables(right, out);
+        }
+    }
 }
 
 fn decode_hex_utf8(hex: &str) -> Option<String> {

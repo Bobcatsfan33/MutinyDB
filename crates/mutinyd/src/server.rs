@@ -6,7 +6,7 @@
 //! loud tenant fills its own queue and answers `Overloaded`; it cannot occupy another tenant's
 //! worker. Determinism per tenant is schweepd's one-thread-one-engine law, kept.
 
-use crate::config::{Config, QuotaConfig, QUARANTINE_NOTICE, SURFACE_VERSION};
+use crate::config::{Config, QuotaConfig, TenantConfig, QUARANTINE_NOTICE, SURFACE_VERSION};
 use crate::metrics::{trace, Metrics};
 use crate::plane::{PlaneError, TenantPlane, WriteRequest};
 use schweep_server::wire::{respond, respond_error, ErrorKind};
@@ -181,24 +181,277 @@ enum Job {
         request: serde_json::Value,
         reply: SyncSender<JobResult>,
     },
-    Shutdown {
-        reply: SyncSender<JobResult>,
-    },
+    /// Drain (structural), compact, checkpoint, close: the M7 sleep. The worker exits after.
+    Sleep { reply: SyncSender<JobResult> },
+    /// Teardown without a checkpoint promise (removal). The worker exits after.
+    Shutdown { reply: SyncSender<JobResult> },
 }
 
-struct TenantHandle {
-    sender: SyncSender<Job>,
-    quota: Mutex<QuotaWindow>,
+/// One registered tenant as the running server holds it: its config, its quota window, and —
+/// only while awake — its worker's queue.
+struct TenantRuntime {
+    config: TenantConfig,
+    quota: QuotaWindow,
+    live: Option<SyncSender<Job>>,
 }
 
-/// The server: one listener, one worker per tenant, one metrics registry.
+struct Fleet {
+    tenants: Mutex<BTreeMap<String, TenantRuntime>>,
+    registry: Mutex<crate::fleet::FleetRegistry>,
+    data_dir: std::path::PathBuf,
+    embedding: crate::config::EmbeddingConfig,
+    checkpoint_every: u64,
+    metrics: Arc<Metrics>,
+}
+
+impl Fleet {
+    fn publish_gauges(&self) {
+        let (registered, resident) = self
+            .tenants
+            .lock()
+            .map(|tenants| {
+                (
+                    tenants.len(),
+                    tenants.values().filter(|t| t.live.is_some()).count(),
+                )
+            })
+            .unwrap_or((0, 0));
+        self.metrics
+            .gauge("mutiny_fleet_registered", registered as i64);
+        self.metrics.gauge("mutiny_fleet_resident", resident as i64);
+    }
+
+    /// Wake-on-delta's engine: return the tenant's live queue, waking it if it sleeps. Wakes are
+    /// serialized fleet-wide (single-flight) — stated in docs/M7-FLEET.md.
+    fn ensure_awake(&self, name: &str) -> Result<SyncSender<Job>, (ErrorKind, String)> {
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| (ErrorKind::Internal, "fleet lock poisoned".to_owned()))?;
+        let runtime = tenants
+            .get_mut(name)
+            .ok_or_else(|| (ErrorKind::NotFound, format!("unknown tenant {name:?}")))?;
+        if let Some(sender) = &runtime.live {
+            return Ok(sender.clone());
+        }
+        let state = self
+            .registry
+            .lock()
+            .map_err(|_| (ErrorKind::Internal, "registry lock poisoned".to_owned()))?
+            .rows
+            .get(name)
+            .map(|row| row.state)
+            .ok_or_else(|| (ErrorKind::NotFound, format!("unregistered tenant {name:?}")))?;
+        let config = runtime.config.clone();
+        let opened = match state {
+            crate::fleet::RowState::Asleep => TenantPlane::wake(
+                &self.data_dir,
+                &config,
+                &self.embedding,
+                self.checkpoint_every,
+                Arc::clone(&self.metrics),
+            ),
+            crate::fleet::RowState::Awake => TenantPlane::open(
+                &self.data_dir,
+                &config,
+                &self.embedding,
+                self.checkpoint_every,
+                Arc::clone(&self.metrics),
+            ),
+        };
+        let plane = opened.map_err(|error| (error.kind(), error.to_string()))?;
+        let (sender, receiver) = sync_channel::<Job>(config.quota.queue_depth);
+        let name_owned = name.to_owned();
+        let worker_metrics = Arc::clone(&self.metrics);
+        std::thread::spawn(move || {
+            worker(plane, receiver, &name_owned, &worker_metrics);
+        });
+        runtime.live = Some(sender.clone());
+        self.metrics.inc(&format!(
+            "mutiny_fleet_wakes_total{{path=\"{}\"}}",
+            match state {
+                crate::fleet::RowState::Asleep => "checkpoint",
+                crate::fleet::RowState::Awake => "replay",
+            }
+        ));
+        if state == crate::fleet::RowState::Asleep {
+            let mut registry = self
+                .registry
+                .lock()
+                .map_err(|_| (ErrorKind::Internal, "registry lock poisoned".to_owned()))?;
+            if let Some(row) = registry.rows.get_mut(name) {
+                row.state = crate::fleet::RowState::Awake;
+            }
+            let _ = registry.save();
+        }
+        drop(tenants);
+        self.publish_gauges();
+        trace("fleet_wake", &[("tenant", name.to_owned())]);
+        Ok(sender)
+    }
+
+    /// Sleep one tenant: drain (queue order), compact, checkpoint, close. Idempotent.
+    fn sleep_tenant(&self, name: &str) -> Result<String, (ErrorKind, String)> {
+        // A registered-but-not-resident tenant is first woken so it can sleep WITH a checkpoint —
+        // the contract records asleep rows as bounded-wakeable, and a row without a checkpoint
+        // must never claim to be.
+        let sender = self.ensure_awake(name)?;
+        let (reply_sender, reply_receiver) = sync_channel::<JobResult>(1);
+        sender
+            .send(Job::Sleep {
+                reply: reply_sender,
+            })
+            .map_err(|_| (ErrorKind::Internal, "the worker is gone".to_owned()))?;
+        let outcome = reply_receiver.recv().map_err(|_| {
+            (
+                ErrorKind::Internal,
+                "the worker dropped the sleep".to_owned(),
+            )
+        })?;
+        match outcome {
+            Ok(Reply::Text(report)) => {
+                if let Ok(mut tenants) = self.tenants.lock() {
+                    if let Some(runtime) = tenants.get_mut(name) {
+                        runtime.live = None;
+                    }
+                }
+                if let Ok(mut registry) = self.registry.lock() {
+                    if let Some(row) = registry.rows.get_mut(name) {
+                        row.state = crate::fleet::RowState::Asleep;
+                    }
+                    let _ = registry.save();
+                }
+                self.publish_gauges();
+                trace("fleet_sleep", &[("tenant", name.to_owned())]);
+                Ok(report)
+            }
+            Ok(_) => Err((ErrorKind::Internal, "unexpected sleep reply".to_owned())),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn register_tenant(&self, config: TenantConfig) -> Result<(), (ErrorKind, String)> {
+        crate::config::validate_tenant(&config)
+            .map_err(|error| (ErrorKind::Refused, error.to_string()))?;
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| (ErrorKind::Internal, "fleet lock poisoned".to_owned()))?;
+        if tenants.contains_key(&config.name) {
+            return Err((
+                ErrorKind::Rejected,
+                format!("tenant {:?} is already registered", config.name),
+            ));
+        }
+        let mut registry = self
+            .registry
+            .lock()
+            .map_err(|_| (ErrorKind::Internal, "registry lock poisoned".to_owned()))?;
+        registry.rows.insert(
+            config.name.clone(),
+            crate::fleet::FleetRow {
+                config: config.clone(),
+                state: crate::fleet::RowState::Awake,
+            },
+        );
+        registry
+            .save()
+            .map_err(|error| (ErrorKind::Internal, error.to_string()))?;
+        tenants.insert(
+            config.name.clone(),
+            TenantRuntime {
+                quota: QuotaWindow::new(config.quota),
+                config,
+                live: None,
+            },
+        );
+        drop(registry);
+        drop(tenants);
+        self.publish_gauges();
+        Ok(())
+    }
+
+    /// Removal is teardown with byte accounting (the M5 rewind discipline, fleet edition):
+    /// worker stopped, directory deleted, registry row gone. Returns the bytes freed.
+    fn remove_tenant(&self, name: &str) -> Result<u64, (ErrorKind, String)> {
+        let mut tenants = self
+            .tenants
+            .lock()
+            .map_err(|_| (ErrorKind::Internal, "fleet lock poisoned".to_owned()))?;
+        let runtime = tenants
+            .get_mut(name)
+            .ok_or_else(|| (ErrorKind::NotFound, format!("unknown tenant {name:?}")))?;
+        if let Some(sender) = runtime.live.take() {
+            let (reply_sender, reply_receiver) = sync_channel::<JobResult>(1);
+            let _ = sender.send(Job::Shutdown {
+                reply: reply_sender,
+            });
+            let _ = reply_receiver.recv();
+        }
+        tenants.remove(name);
+        let mut registry = self
+            .registry
+            .lock()
+            .map_err(|_| (ErrorKind::Internal, "registry lock poisoned".to_owned()))?;
+        registry.rows.remove(name);
+        registry
+            .save()
+            .map_err(|error| (ErrorKind::Internal, error.to_string()))?;
+        drop(registry);
+        drop(tenants);
+        let dir = self.data_dir.join(name);
+        let freed = dir_bytes(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        self.publish_gauges();
+        trace("fleet_remove", &[("tenant", name.to_owned())]);
+        Ok(freed)
+    }
+
+    fn status(&self) -> String {
+        let mut out = String::new();
+        let registry = self.registry.lock();
+        let tenants = self.tenants.lock();
+        if let (Ok(registry), Ok(tenants)) = (registry, tenants) {
+            let resident = tenants.values().filter(|t| t.live.is_some()).count();
+            out.push_str(&format!(
+                "registered {}\nresident {}\n",
+                registry.rows.len(),
+                resident
+            ));
+            for (name, row) in &registry.rows {
+                let live = tenants.get(name).map(|t| t.live.is_some()).unwrap_or(false);
+                out.push_str(&format!(
+                    "tenant {name} state {:?} resident {live}\n",
+                    row.state
+                ));
+            }
+        }
+        out
+    }
+}
+
+fn dir_bytes(dir: &std::path::Path) -> u64 {
+    let mut total = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                total += dir_bytes(&path);
+            } else if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+/// The server: one listener, the fleet, one metrics registry.
 pub struct MutinyServer {
     listener: TcpListener,
-    tenants: Arc<BTreeMap<String, TenantHandle>>,
+    fleet: Arc<Fleet>,
     metrics: Arc<Metrics>,
     operator_token: String,
     running: Arc<AtomicBool>,
-    workers: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl MutinyServer {
@@ -206,37 +459,34 @@ impl MutinyServer {
         let listener = TcpListener::bind(&config.listen)
             .map_err(|e| PlaneError::Internal(format!("bind {}: {e}", config.listen)))?;
         let metrics = Arc::new(Metrics::default());
+        let registry = crate::fleet::FleetRegistry::load_or_seed(&config.data_dir, config)
+            .map_err(|e| PlaneError::Internal(e.to_string()))?;
         let mut tenants = BTreeMap::new();
-        let mut workers = Vec::new();
-        for tenant in &config.tenants {
-            let plane = TenantPlane::open(
-                &config.data_dir,
-                tenant,
-                &config.embedding,
-                config.checkpoint_every,
-                Arc::clone(&metrics),
-            )?;
-            let (sender, receiver) = sync_channel::<Job>(tenant.quota.queue_depth);
-            let name = tenant.name.clone();
-            let worker_metrics = Arc::clone(&metrics);
-            workers.push(std::thread::spawn(move || {
-                worker(plane, receiver, &name, &worker_metrics);
-            }));
+        for (name, row) in &registry.rows {
             tenants.insert(
-                tenant.name.clone(),
-                TenantHandle {
-                    sender,
-                    quota: Mutex::new(QuotaWindow::new(tenant.quota)),
+                name.clone(),
+                TenantRuntime {
+                    quota: QuotaWindow::new(row.config.quota),
+                    config: row.config.clone(),
+                    live: None,
                 },
             );
         }
+        let fleet = Arc::new(Fleet {
+            tenants: Mutex::new(tenants),
+            registry: Mutex::new(registry),
+            data_dir: config.data_dir.clone(),
+            embedding: config.embedding.clone(),
+            checkpoint_every: config.checkpoint_every,
+            metrics: Arc::clone(&metrics),
+        });
+        fleet.publish_gauges();
         Ok(MutinyServer {
             listener,
-            tenants: Arc::new(tenants),
+            fleet,
             metrics,
             operator_token: config.operator_token.clone(),
             running: Arc::new(AtomicBool::new(true)),
-            workers,
         })
     }
 
@@ -256,26 +506,21 @@ impl MutinyServer {
         Arc::clone(&self.running)
     }
 
-    /// Serve until `/shutdown` (operator) arrives. Each connection is parsed, admitted, and
-    /// dispatched on its own thread; the per-tenant worker is the serialization point.
-    pub fn serve(mut self) -> Result<(), PlaneError> {
+    /// Serve until `/shutdown` (operator). Tenants wake on demand — including on the first
+    /// request after a restart, which is how a crashed mutinyd recovers its fleet lazily.
+    pub fn serve(self) -> Result<(), PlaneError> {
         while self.running.load(Ordering::SeqCst) {
             let (stream, _) = match self.listener.accept() {
                 Ok(pair) => pair,
                 Err(_) => break,
             };
-            let tenants = Arc::clone(&self.tenants);
+            let fleet = Arc::clone(&self.fleet);
             let metrics = Arc::clone(&self.metrics);
             let operator_token = self.operator_token.clone();
             let running = Arc::clone(&self.running);
             std::thread::spawn(move || {
-                handle_connection(stream, &tenants, &metrics, &operator_token, &running);
+                handle_connection(stream, &fleet, &metrics, &operator_token, &running);
             });
-        }
-        // The accept loop has ended; let every worker drain and stop.
-        drop(self.tenants);
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
         }
         Ok(())
     }
@@ -283,7 +528,7 @@ impl MutinyServer {
 
 fn handle_connection(
     mut stream: TcpStream,
-    tenants: &BTreeMap<String, TenantHandle>,
+    fleet: &Arc<Fleet>,
     metrics: &Arc<Metrics>,
     operator_token: &str,
     running: &Arc<AtomicBool>,
@@ -292,47 +537,122 @@ fn handle_connection(
         Ok(Some(request)) => request,
         _ => return,
     };
+    let operator = request.bearer.as_deref() == Some(operator_token);
 
-    // ---- unadmitted ops endpoints: metrics and shutdown ---------------------------------------
+    // ---- unadmitted ops endpoints: metrics, fleet control, shutdown ---------------------------
     if request.method == "GET" && request.path == "/metrics" {
         let _ = respond(&mut stream, metrics.render().as_bytes());
         return;
     }
-    if request.method == "POST" && request.path == "/shutdown" {
-        if request.bearer.as_deref() != Some(operator_token) {
+    if request.path.starts_with("/fleet/") || request.path == "/shutdown" {
+        if !operator {
             let _ = respond_error(
                 &mut stream,
                 ErrorKind::Rejected,
-                "the operator bearer token is required",
+                "fleet control is operator-only: present the operator bearer token",
             );
             return;
         }
-        let mut report = String::from("shutdown\n");
-        for (name, handle) in tenants.iter() {
-            let (reply_sender, reply_receiver) = sync_channel::<JobResult>(1);
-            if handle
-                .sender
-                .send(Job::Shutdown {
-                    reply: reply_sender,
-                })
-                .is_ok()
-            {
-                if let Ok(Ok(Reply::Text(text))) = reply_receiver.recv() {
-                    report.push_str(&format!("tenant {name}\n{text}"));
+        let answer: Result<String, (ErrorKind, String)> =
+            match (request.method.as_str(), request.path.as_str()) {
+                ("POST", "/shutdown") => {
+                    // Graceful shutdown = fleet-wide sleep: every resident tenant drains,
+                    // compacts, and checkpoints, so the restart wakes bounded.
+                    let names: Vec<String> = fleet
+                        .tenants
+                        .lock()
+                        .map(|tenants| {
+                            tenants
+                                .iter()
+                                .filter(|(_, t)| t.live.is_some())
+                                .map(|(name, _)| name.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let mut report = String::from("shutdown\n");
+                    for name in names {
+                        match fleet.sleep_tenant(&name) {
+                            Ok(drained) => report.push_str(&format!("tenant {name}\n{drained}")),
+                            Err((_, message)) => {
+                                report.push_str(&format!("tenant {name} sleep failed: {message}\n"))
+                            }
+                        }
+                    }
+                    running.store(false, Ordering::SeqCst);
+                    if let Ok(address) = stream.local_addr() {
+                        let _ = TcpStream::connect(address);
+                    }
+                    Ok(report)
                 }
+                ("POST", "/fleet/register") => {
+                    match serde_json::from_slice::<TenantConfig>(&request.body) {
+                        Ok(config) => {
+                            let name = config.name.clone();
+                            fleet
+                                .register_tenant(config)
+                                .map(|()| format!("registered {name}\n"))
+                        }
+                        Err(error) => Err((
+                            ErrorKind::Refused,
+                            format!("the body is not a TenantConfig: {error}"),
+                        )),
+                    }
+                }
+                ("POST", "/fleet/sleep") => body_tenant(&request)
+                    .and_then(|name| fleet.sleep_tenant(&name).map(|r| format!("asleep\n{r}"))),
+                ("POST", "/fleet/wake") => body_tenant(&request)
+                    .and_then(|name| fleet.ensure_awake(&name).map(|_| format!("awake {name}\n"))),
+                ("POST", "/fleet/remove") => body_tenant(&request).and_then(|name| {
+                    fleet
+                        .remove_tenant(&name)
+                        .map(|freed| format!("removed {name}\nfreed_bytes {freed}\n"))
+                }),
+                ("GET", "/fleet/status") => Ok(fleet.status()),
+                ("GET", "/fleet/mapping") => {
+                    let tenant = request.query.get("tenant").cloned().unwrap_or_default();
+                    let looked = fleet
+                        .tenants
+                        .lock()
+                        .ok()
+                        .and_then(|tenants| tenants.get(&tenant).map(|t| t.config.clone()));
+                    match looked {
+                        // Observed WITHOUT waking: the mapping reads the compute plane's persisted
+                        // registration file and binds through its public binder (MD-1 R2).
+                        Some(config) => crate::plane::circuit_mapping_for(
+                            &fleet.data_dir.join(&tenant).join("compute"),
+                            &config,
+                        )
+                        .map(|mapping| {
+                            let mut out = String::new();
+                            for (circuit, tables) in mapping {
+                                out.push_str(&format!(
+                                    "{circuit}: {}\n",
+                                    tables.into_iter().collect::<Vec<_>>().join(",")
+                                ));
+                            }
+                            out
+                        })
+                        .map_err(|error| (error.kind(), error.to_string())),
+                        None => Err((ErrorKind::NotFound, format!("unknown tenant {tenant:?}"))),
+                    }
+                }
+                _ => Err((
+                    ErrorKind::NotFound,
+                    format!("no fleet route {} {}", request.method, request.path),
+                )),
+            };
+        match answer {
+            Ok(body) => {
+                let _ = respond(&mut stream, body.as_bytes());
             }
-        }
-        trace("shutdown", &[("report", report.clone())]);
-        let _ = respond(&mut stream, report.as_bytes());
-        running.store(false, Ordering::SeqCst);
-        // Nudge the accept loop awake so it observes the flag.
-        if let Ok(address) = stream.local_addr() {
-            let _ = TcpStream::connect(address);
+            Err((kind, message)) => {
+                let _ = respond_error(&mut stream, kind, &message);
+            }
         }
         return;
     }
 
-    // ---- tenant-scoped: /v1/<tenant>/... ------------------------------------------------------
+    // ---- tenant-scoped: /v1/<tenant>/... -------------------------------------------------------
     let segments: Vec<&str> = request.path.split('/').filter(|s| !s.is_empty()).collect();
     if segments.len() < 3 || segments[0] != "v1" {
         let _ = respond_error(
@@ -343,23 +663,12 @@ fn handle_connection(
         return;
     }
     let tenant = segments[1].to_owned();
-    let Some(handle) = tenants.get(&tenant) else {
-        let _ = respond_error(
-            &mut stream,
-            ErrorKind::NotFound,
-            &format!("unknown tenant {tenant:?}"),
-        );
-        return;
-    };
-
     let door: &'static str = match segments[2] {
         "sql" => "sql",
         "mcp" => "mcp",
         _ => "typed",
     };
-    let operator = request.bearer.as_deref() == Some(operator_token);
 
-    // Operator-only routes are checked before admission so a missing token cannot consume quota.
     let is_operator_route = matches!(segments.get(2).copied(), Some("action"))
         && segments.get(3).copied() == Some("execute")
         || segments.get(2).copied() == Some("taint");
@@ -372,19 +681,40 @@ fn handle_connection(
         return;
     }
 
-    // ---- the admission boundary ---------------------------------------------------------------
-    let charged = handle
-        .quota
-        .lock()
-        .map_err(|_| "quota lock poisoned".to_owned())
-        .and_then(|mut quota| quota.charge(request.body.len() as u64));
-    if let Err(reason) = charged {
-        metrics.inc(&format!(
-            "mutiny_refused_total{{tenant=\"{tenant}\",door=\"{door}\",kind=\"Overloaded\"}}"
-        ));
-        let _ = respond_error(&mut stream, ErrorKind::Overloaded, &reason);
-        return;
+    // ---- the admission boundary ----------------------------------------------------------------
+    {
+        let mut tenants = match fleet.tenants.lock() {
+            Ok(tenants) => tenants,
+            Err(_) => {
+                let _ = respond_error(&mut stream, ErrorKind::Internal, "fleet lock poisoned");
+                return;
+            }
+        };
+        let Some(runtime) = tenants.get_mut(&tenant) else {
+            let _ = respond_error(
+                &mut stream,
+                ErrorKind::NotFound,
+                &format!("unknown tenant {tenant:?}"),
+            );
+            return;
+        };
+        if let Err(reason) = runtime.quota.charge(request.body.len() as u64) {
+            metrics.inc(&format!(
+                "mutiny_refused_total{{tenant=\"{tenant}\",door=\"{door}\",kind=\"Overloaded\"}}"
+            ));
+            let _ = respond_error(&mut stream, ErrorKind::Overloaded, &reason);
+            return;
+        }
     }
+
+    // ---- wake-on-delta: an admitted request for a sleeping tenant wakes it --------------------
+    let sender = match fleet.ensure_awake(&tenant) {
+        Ok(sender) => sender,
+        Err((kind, message)) => {
+            let _ = respond_error(&mut stream, kind, &message);
+            return;
+        }
+    };
 
     let (reply_sender, reply_receiver) = sync_channel::<JobResult>(1);
     let job = if door == "mcp" {
@@ -411,7 +741,7 @@ fn handle_connection(
         }
     };
 
-    match handle.sender.try_send(job) {
+    match sender.try_send(job) {
         Ok(()) => {}
         Err(TrySendError::Full(_)) => {
             metrics.inc(&format!(
@@ -464,8 +794,27 @@ fn handle_connection(
     }
 }
 
-fn worker(mut plane: TenantPlane, receiver: Receiver<Job>, tenant: &str, metrics: &Arc<Metrics>) {
+fn body_tenant(request: &HttpRequest) -> Result<String, (ErrorKind, String)> {
+    serde_json::from_slice::<serde_json::Value>(&request.body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("tenant")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| {
+            (
+                ErrorKind::Refused,
+                "the body must be JSON with a \"tenant\" field".to_owned(),
+            )
+        })
+}
+
+fn worker(plane: TenantPlane, receiver: Receiver<Job>, tenant: &str, metrics: &Arc<Metrics>) {
+    let mut plane = Some(plane);
     while let Ok(job) = receiver.recv() {
+        let Some(live) = plane.as_mut() else { break };
         match job {
             Job::Http {
                 request,
@@ -473,28 +822,63 @@ fn worker(mut plane: TenantPlane, receiver: Receiver<Job>, tenant: &str, metrics
                 operator,
                 reply,
             } => {
-                let result = dispatch(&mut plane, &request, door, operator)
+                let result = dispatch(live, &request, door, operator)
                     .map_err(|error| (error.kind(), error.to_string()));
                 metrics.gauge(
                     &format!("mutiny_engine_epoch{{tenant=\"{tenant}\"}}"),
-                    plane.engine_epoch() as i64,
+                    live.engine_epoch() as i64,
                 );
                 let _ = reply.send(result);
             }
             Job::Mcp { request, reply } => {
-                let response = crate::mcp::handle(&mut plane, &request);
+                let response = crate::mcp::handle(live, &request);
                 let _ = reply.send(Ok(Reply::Json(response)));
             }
+            Job::Sleep { reply } => {
+                let taken = plane.take();
+                let result = match taken {
+                    Some(plane) => {
+                        // The M6-SURFACE drain report is additive-only: epoch, pending_appends,
+                        // and registrations stay; the checkpoint line is the M7 addition.
+                        let health = plane.health();
+                        let line = |name: &str| {
+                            health
+                                .lines()
+                                .find(|l| l.starts_with(name))
+                                .unwrap_or_default()
+                                .to_owned()
+                        };
+                        let epoch = plane.engine_epoch();
+                        let pending = line("pending_appends");
+                        let registrations = line("registrations");
+                        plane
+                            .sleep()
+                            .map(|()| {
+                                Reply::Text(format!(
+                                    "epoch {epoch}\n{pending}\n{registrations}\ncheckpointed true\n"
+                                ))
+                            })
+                            .map_err(|error| (error.kind(), error.to_string()))
+                    }
+                    None => Err((ErrorKind::Internal, "no plane to sleep".to_owned())),
+                };
+                let _ = reply.send(result);
+                break;
+            }
             Job::Shutdown { reply } => {
-                let result = plane
-                    .shutdown()
-                    .map(|drained| {
-                        Reply::Text(format!(
-                            "epoch {}\npending_appends {}\nregistrations {}\n",
-                            drained.epoch, drained.pending_appends, drained.registrations
-                        ))
-                    })
-                    .map_err(|error| (error.kind(), error.to_string()));
+                let taken = plane.take();
+                let result = match taken {
+                    Some(mut plane) => plane
+                        .shutdown()
+                        .map(|drained| {
+                            Reply::Text(format!(
+                                "epoch {}\npending_appends {}\nregistrations {}\n",
+                                drained.epoch, drained.pending_appends, drained.registrations
+                            ))
+                        })
+                        .map_err(|error| (error.kind(), error.to_string())),
+                    None => Err((ErrorKind::Internal, "no plane to shut down".to_owned())),
+                };
                 let _ = reply.send(result);
                 break;
             }
