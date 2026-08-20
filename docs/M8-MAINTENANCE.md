@@ -134,6 +134,13 @@ instrument artifact, not memory the OS cannot take back. The soak therefore meas
 where the default allocator returns large freed blocks via `munmap`). An instrument that fails
 flat processes is as dishonest as one that passes growing ones.
 
+The Linux instrument needed the same correction in its own dialect: with mimalloc purging via
+`MADV_FREE`, the freed pages stay **in RSS until memory pressure reclaims them** — the second
+post-#14 nightly's residual "growth" (raw 85.7 MB against 8.2 MB of live data) was those
+lazily-freed pages, counted by `ps` and invisible to reclaim accounting. The soak on Linux now
+measures `Rss − LazyFree` from `/proc/<pid>/smaps_rollup` — allocator-agnostic, and a genuine
+leak is never LazyFree, so it remains fully visible.
+
 The shape baseline moved for the same reason: the original gate compared the last third against
 the **first** third, and the first third is the warmup ramp from a cold start to the working
 set — a gate that punishes reaching a working set fails flat processes too. The gate now

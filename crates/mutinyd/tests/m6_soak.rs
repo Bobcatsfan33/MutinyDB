@@ -86,13 +86,35 @@ fn request(
     ))
 }
 
-/// Resident memory in KiB — measured honestly per platform. On Linux (where the nightly gate
-/// runs) `ps rss` is the right instrument. On macOS it is not: the default allocator retains
-/// *clean, reclaimable* pages that `ps` counts as resident, so a process whose physical
-/// footprint is flat at ~21 MB reads as 60+ MB and climbing (measured 2026-08-21, issue #12
-/// follow-up: footprint 21.5 MB / peak 26.2 MB while `ps rss` said 66 MB). `footprint(1)`
-/// reports what memory pressure actually sees; fall back to `ps` when it is unavailable.
+/// Resident memory in KiB — **what memory pressure actually sees**, measured honestly per
+/// platform. Raw `ps rss` lies in both directions of reclaimable-but-resident pages: on macOS
+/// the default allocator retains clean reclaimable pages that `ps` counts (footprint was flat
+/// at ~21 MB while `ps` said 66 MB and climbing — measured 2026-08-21), so macOS uses
+/// `footprint(1)`; on Linux an allocator purging with `MADV_FREE` leaves those pages in RSS
+/// until pressure reclaims them (`LazyFree` in smaps_rollup counts exactly those — the second
+/// post-#14 nightly's "growth" was this), so Linux uses `Rss − LazyFree`. A genuine leak is
+/// never clean and never LazyFree, so it is fully visible to both instruments. `ps` is the
+/// last-resort fallback.
 fn rss_kb(pid: u32) -> Option<u64> {
+    if cfg!(target_os = "linux") {
+        // Same correction, Linux form: an allocator that purges freed pages with MADV_FREE
+        // (mimalloc's default) leaves them IN RSS until memory pressure reclaims them —
+        // `LazyFree` in smaps_rollup counts exactly those. Rss − LazyFree is what pressure
+        // actually sees, allocator-agnostic; a genuine leak is never LazyFree.
+        if let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup")) {
+            let field = |name: &str| -> Option<u64> {
+                text.lines().find_map(|line| {
+                    line.strip_prefix(name)?
+                        .trim()
+                        .strip_suffix("kB")
+                        .and_then(|value| value.trim().parse().ok())
+                })
+            };
+            if let Some(rss) = field("Rss:") {
+                return Some(rss.saturating_sub(field("LazyFree:").unwrap_or(0)));
+            }
+        }
+    }
     if cfg!(target_os = "macos") {
         if let Ok(output) = Command::new("footprint").arg(pid.to_string()).output() {
             let text = String::from_utf8_lossy(&output.stdout).into_owned();
