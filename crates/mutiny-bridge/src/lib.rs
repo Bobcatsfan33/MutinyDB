@@ -178,6 +178,12 @@ pub enum BridgeError {
     CatalogMismatch { reason: String },
     #[error("the durable capture at commit {commit} is missing or malformed: {reason}")]
     CaptureDecode { commit: String, reason: String },
+    #[error(
+        "the queue was consumed past the sealed epoch: maintenance collapsed history through \
+         commit {floor} but the compute plane sealed only {sealed} — captures {}..={floor} are \
+         unrecoverable (docs/M8-MAINTENANCE.md)", sealed + 1
+    )]
+    ConsumedBeyondSealed { floor: u64, sealed: u64 },
     #[error("substrate refused the captured commit: {reason}")]
     Storage { reason: String },
     #[error(
@@ -279,6 +285,26 @@ pub fn recover_pending_captures(
                 reason: error.to_string(),
             })?;
         let Some(parent) = manifest.parent else {
+            // The chain's root. A collapsed root still carries its capture page; if that capture
+            // is NEWER than the caller's sealed epoch, maintenance consumed the queue past the
+            // consumer — captures sealed+1..=floor are unrecoverable, and this walk must refuse
+            // rather than return an innocently empty suffix (docs/M8-MAINTENANCE.md, tooth a).
+            let has_capture = store
+                .pager()
+                .lookup(&current, CAPTURE_PAGE)
+                .map_err(|error| BridgeError::Storage {
+                    reason: error.to_string(),
+                })?
+                .is_some();
+            if has_capture {
+                let floor = recover_capture(store, current)?.commit_seq;
+                if floor > sealed_epoch {
+                    return Err(BridgeError::ConsumedBeyondSealed {
+                        floor,
+                        sealed: sealed_epoch,
+                    });
+                }
+            }
             break;
         };
         let capture = recover_capture(store, current)?;
@@ -967,4 +993,176 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(output, "{byte:02x}");
     }
     output
+}
+
+// ---- M8 maintenance: consuming the durable queue (docs/M8-MAINTENANCE.md, issue #12) ----------
+
+/// What one maintenance pass did to a tenant's storage. Every field is measured, not inferred.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MaintenanceStats {
+    /// Application pages removed by the prune transaction (S3).
+    pub pruned_pages: u64,
+    /// Whether the manifest chain was collapsed to a flat root (S4–S5).
+    pub collapsed: bool,
+    /// Manifests swept by GC (S6).
+    pub manifests_swept: u64,
+    /// Pages swept by GC (S6).
+    pub pages_swept: u64,
+}
+
+/// If this store's history has been collapsed, the `commit_seq` its flat root carries.
+///
+/// A collapsed store cannot serve full replay — its queue was consumed below this floor — and a
+/// caller holding no plane checkpoint must refuse by name rather than rebuild from a truncated
+/// history. (The dense-sequence check in [`recover_pending_captures`] refuses structurally; this
+/// helper exists so the refusal can be *named*.)
+pub fn collapsed_floor(store: &DurableStore, head: ManifestId) -> Result<Option<u64>, BridgeError> {
+    let mut current = head;
+    loop {
+        let manifest = store
+            .pager()
+            .manifest(&current)
+            .map_err(|error| BridgeError::Storage {
+                reason: error.to_string(),
+            })?;
+        let Some(parent) = manifest.parent else {
+            // The chain's root. A pristine store roots at the canonical empty manifest (no
+            // capture page); a collapsed store roots at a flat manifest that still carries one.
+            let has_capture = store
+                .pager()
+                .lookup(&current, CAPTURE_PAGE)
+                .map_err(|error| BridgeError::Storage {
+                    reason: error.to_string(),
+                })?
+                .is_some();
+            if !has_capture {
+                return Ok(None);
+            }
+            let capture = recover_capture(store, current)?;
+            return Ok(Some(capture.commit_seq));
+        };
+        current = parent;
+    }
+}
+
+/// **S3 — prune the consumed prefix of the queue.** One ordinary WAL-committed transaction that
+/// removes every application page not referenced by a capture newer than `through_seq`. The
+/// capture page always survives, so the next commit's parent-sequence validation reads exactly
+/// what it read before. Application pages are write-only after commit (the M1 audit runs at
+/// commit time; only the capture page is ever read back), so this changes no answer.
+pub fn prune_consumed(store: &DurableStore, through_seq: u64) -> Result<u64, BridgeError> {
+    let head = store.head();
+    let pending = recover_pending_captures(store, head, through_seq)?;
+    let mut keep: BTreeSet<LogicalPageNo> = pending
+        .iter()
+        .flat_map(|capture| capture.physical_pages.iter().copied())
+        .collect();
+    keep.insert(CAPTURE_PAGE);
+
+    let resolved = store
+        .pager()
+        .resolve(&head)
+        .map_err(|error| BridgeError::Storage {
+            reason: error.to_string(),
+        })?;
+    let doomed: Vec<LogicalPageNo> = resolved
+        .keys()
+        .copied()
+        .filter(|page| !keep.contains(page))
+        .collect();
+    if doomed.is_empty() {
+        return Ok(0);
+    }
+
+    let mut txn = store.begin().map_err(|error| BridgeError::Storage {
+        reason: error.to_string(),
+    })?;
+    for page in &doomed {
+        store
+            .remove(&mut txn, *page)
+            .map_err(|error| BridgeError::Storage {
+                reason: error.to_string(),
+            })?;
+    }
+    store.commit(txn).map_err(|error| BridgeError::Storage {
+        reason: error.to_string(),
+    })?;
+    Ok(doomed.len() as u64)
+}
+
+/// **S4–S6 — collapse the manifest chain and sweep.** Installs a flat root carrying the head's
+/// page map with `parent = None` (content-addressed idempotent: the head's own timestamp is
+/// reused, so collapsing the same head twice is one manifest), makes it durable with the WAL
+/// checkpoint, then GCs with the new root as the only live root. The ordering is the law:
+/// the install is volatile until the WAL checkpoint (a crash between them merely loses the
+/// collapse), and GC runs strictly after the checkpoint (sweeping manifests the WAL might still
+/// replay against would leave a crashed store unopenable).
+pub fn collapse_history(store: &DurableStore) -> Result<MaintenanceStats, BridgeError> {
+    let collapsed = install_collapsed_root(store)?;
+    checkpoint_wal(store)?;
+    let (manifests_swept, pages_swept) = sweep(store)?;
+    Ok(MaintenanceStats {
+        pruned_pages: 0,
+        collapsed,
+        manifests_swept,
+        pages_swept,
+    })
+}
+
+/// **S4 alone** — install the flat root. Volatile until [`checkpoint_wal`]: the pager's head
+/// durability comes from the WAL, so a crash here loses only the collapse (recovery replays the
+/// WAL back to the pruned head, and the orphaned root manifest is swept as unreachable by the
+/// next GC). Returns `false` when the head is already a root.
+pub fn install_collapsed_root(store: &DurableStore) -> Result<bool, BridgeError> {
+    let pager = store.pager();
+    let head = store.head();
+    let manifest = pager
+        .manifest(&head)
+        .map_err(|error| BridgeError::Storage {
+            reason: error.to_string(),
+        })?;
+    if manifest.parent.is_none() {
+        return Ok(false);
+    }
+    let resolved = pager.resolve(&head).map_err(|error| BridgeError::Storage {
+        reason: error.to_string(),
+    })?;
+    let page_count = resolved.len() as u64;
+    let root = Manifest {
+        format_version: substrate_pager::MANIFEST_FORMAT_VERSION,
+        body: substrate_pager::ManifestBody::Flat(resolved),
+        parent: None,
+        created_at_ms: manifest.created_at_ms,
+        schema_version: manifest.schema_version,
+        page_size: manifest.page_size,
+        depth: 0,
+        page_count,
+    };
+    pager.install(&root).map_err(|error| BridgeError::Storage {
+        reason: error.to_string(),
+    })?;
+    Ok(true)
+}
+
+/// **S5 alone** — make the current head (the flat root, when S4 ran) durable and truncate the
+/// WAL segments behind it. Substrate's own crash story covers the record/marker seam.
+pub fn checkpoint_wal(store: &DurableStore) -> Result<(), BridgeError> {
+    store.checkpoint().map_err(|error| BridgeError::Storage {
+        reason: error.to_string(),
+    })?;
+    Ok(())
+}
+
+/// **S6 alone** — GC with the head as the only live root. Runs strictly after [`checkpoint_wal`]
+/// (sweeping manifests the WAL might still replay against would leave a crashed store
+/// unopenable); an interrupted sweep leaves garbage for the next run and can never delete
+/// anything live. Returns `(manifests_swept, pages_swept)`.
+pub fn sweep(store: &DurableStore) -> Result<(u64, u64), BridgeError> {
+    let swept = store
+        .pager()
+        .gc(&[store.head()])
+        .map_err(|error| BridgeError::Storage {
+            reason: error.to_string(),
+        })?;
+    Ok((swept.manifests_swept, swept.pages_swept))
 }

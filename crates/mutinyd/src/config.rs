@@ -53,6 +53,16 @@ pub struct TenantConfig {
     /// exactly the work this field will grow into.
     #[serde(default)]
     pub connectors: Vec<ConnectorConfig>,
+    /// Awake maintenance triggers after this many commits (docs/M8-MAINTENANCE.md, issue #12).
+    /// The default is the measured constant in `evidence/m8-maintenance-policy.json`, not
+    /// folklore. `0` disables — dev only; the nightly soak gates the default.
+    #[serde(default = "default_maintenance_every")]
+    pub maintenance_every: u64,
+}
+
+/// See `crates/mutinyd/evidence/m8-maintenance-policy.json` for the measurement that chose this.
+pub fn default_maintenance_every() -> u64 {
+    64
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]

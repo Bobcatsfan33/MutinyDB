@@ -1,0 +1,14 @@
+{
+  "what": "The measurement behind `maintenance_every`'s default (docs/M8-MAINTENANCE.md, issue #12). Three candidates ran the soak workload (windows of 16 writes, previous window tainted away — retract-as-you-go) against the release binary for 280 s each on the same host, measuring throughput, the worst single-write stall (a maintenance pass lands on the write path's tail), and the storage footprint the policy is meant to bound.",
+  "harness": "same-host release mutinyd, one tenant, HTTP door driven by curl (per-write timing includes client overhead of ~30-50 ms, identical across candidates); 2026-08-21, Apple Silicon macOS (Darwin 24.6.0)",
+  "candidates": [
+    { "maintenance_every": 16, "writes_in_280s": 2960, "max_write_ms": 105, "storage_kib_at_end": 656, "manifest_files_at_end": 1 },
+    { "maintenance_every": 64, "writes_in_280s": 3168, "max_write_ms": 475, "storage_kib_at_end": 1104, "manifest_files_at_end": 33 },
+    { "maintenance_every": 256, "writes_in_280s": 3088, "max_write_ms": 151, "storage_kib_at_end": 848, "manifest_files_at_end": 17 }
+  ],
+  "reading": "Throughput is equal within noise (±3%). The worst-stall column is a single maximum and is noise-dominated (it is not monotone in the candidate), so it distinguishes nothing here beyond 'sub-second in all cases'. The real difference is exactly what the policy promises: the storage residue between passes scales with N (manifest files at end: 1 / 33 / 17 ≈ commits since the last pass), and every candidate holds storage three orders of magnitude under the unbounded failure mode this fixes (~75 MB and growing at the same workload length, see #12).",
+  "choice": {
+    "default": 64,
+    "why": "With throughput and stalls indistinguishable at this workload, 64 keeps the residue bound tight (at most 64 commits of un-collapsed history) without paying the pass's fixed cost (engine checkpoint + snapshot) four times as often as 16 would for no measured benefit. Config overrides per tenant; 0 disables (dev only — the nightly soak gates the default)."
+  }
+}

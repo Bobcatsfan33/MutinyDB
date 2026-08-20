@@ -24,6 +24,16 @@
 There is no mutable second checkpoint between storage and compute. The manifest history is the
 durable queue; the sealed epoch is the offset.
 
+**Amended at M8 (docs/M8-MAINTENANCE.md, issue #12):** the queue may be *consumed*. Maintenance
+prunes application pages of captures at or below a durable plane checkpoint and collapses the
+manifest chain to a flat root that still carries the head capture page — so the dense-sequence
+law holds across the collapse, `recover_pending_captures` stops cleanly at the root, and full
+replay of a collapsed store **fails closed** through the same dense-sequence check (the first
+recoverable capture is no longer 1). History below a plane checkpoint is truncated only after
+that checkpoint is durable, and GC runs only after the WAL checkpoint that makes the collapse
+durable. The plane checkpoint is not a second *mutable* truth about the queue's content — it is
+the recorded consumer state that permits discarding what was consumed.
+
 ## Fail-closed boundaries
 
 - The capture page is reserved and cannot already be present in the caller's transaction.
