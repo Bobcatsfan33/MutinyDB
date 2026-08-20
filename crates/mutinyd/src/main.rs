@@ -4,6 +4,14 @@
 use mutinyd::{banner, Config, MutinyServer};
 use std::io::{BufRead, Write};
 
+/// The binary's allocator (docs/M8-MAINTENANCE.md, S7): glibc keeps freed arena pages resident —
+/// the nightly soak measured resident ≈ 5× live data, all of it *freed* transients from the
+/// engine's per-pass compaction hydration — while mimalloc purges freed pages back to the OS.
+/// With it, resident memory means live data, which is exactly what the soak's residual gate
+/// asserts. A genuine leak is unaffected by the allocator and still fires the gate.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const HELP: &str = "\
 mutinyd — MutinyDB's one surface: SQL, typed, and MCP doors over one admission boundary.
 

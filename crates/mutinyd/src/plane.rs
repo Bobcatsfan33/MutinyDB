@@ -510,16 +510,6 @@ impl TenantPlane {
             manifests_swept,
             pages_swept,
         };
-        // S7, Linux only: hand freed pages back to the OS. The engine's compaction materializes
-        // the full live state transiently each pass (its own design), and glibc keeps the freed
-        // arena pages resident — the nightly measured resident ≈ 5× live data from exactly this.
-        // Returning FREED memory at the drain point is what maintenance is for; a true leak is
-        // untouched by trim and still fires the soak's residual gate (docs/M8-MAINTENANCE.md).
-        #[cfg(target_os = "linux")]
-        // SAFETY: malloc_trim has no preconditions; it only releases allocator-owned free pages.
-        unsafe {
-            libc::malloc_trim(0);
-        }
         self.last_maintained = self.commit_seq;
         self.metrics.inc("mutiny_maintenance_total");
         Ok(stats)
