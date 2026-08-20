@@ -177,7 +177,7 @@ Two different questions, answered separately and labeled:
 
 | Path | Number | Conditions — read them |
 | --- | --- | --- |
-| Composed fleet wake (this repo's sim) | see `crates/mutinyd/evidence/m7-fleet-sim.json` | **same-host, local filesystem**, 10,000 sleeping tenants, cgroup-capped CI runner; wake = engine snapshot+suffix open + membership hydration + first standing answer |
+| Composed fleet wake (this repo's sim) | **p50 178 ms / p99 225 ms** wake-to-first-answer, 10,000 sleeping tenants at ~175 MB RSS (`crates/mutinyd/evidence/m7-fleet-sim.json`) | **same-host, local filesystem**, release mode; wake = engine snapshot+suffix open + membership hydration + one waking write + first standing answer; the nightly `fleet-sim-10k` job repeats the run under a 2 GiB cgroup ceiling |
 | Wide-area wake over object storage (the component track) | **≈ 1 RTT at the median** to the object store (Sydney worst case: p50 179 ms at RTT ≈ 226 ms; p99 ~2 RTT) | substrate ≥ v1.5.0: warm-set carried in the sleep token, hydrated in **one coalesced `get_batch`**, keep-alive `WarmPool` — measured on the component's own `wake-latency-widearea.yml`; the honest SLA is *"wake ≈ 1 RTT to your object store"*, so co-locate the object tier in-region |
 
 The roadmap's "known 1020 ms wide-area item" is closed by the second row — on the component
