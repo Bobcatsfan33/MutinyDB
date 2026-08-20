@@ -8,6 +8,13 @@
 > layer.
 >
 > **Sprint milestones, no timelines.** Phases M0–M8; a phase is done when its exit gate is green.
+> **Conditional green (added after issue #12):** a gate whose evidence depends on a
+> dispatched-but-unfinished long run (a nightly, a soak window, a scheduled qualifying night) is
+> **conditionally** green until that run reports, and the phase record must say so. M6 was closed
+> with "soak with flat memory" while its first nightly-scale soak was still in flight; that run
+> failed the same evening, and nobody looked for two phases. The claim is corrected in the README
+> and preserved in #12. The rule exists so the next long-run gate is either awaited or labeled —
+> never silently assumed.
 > This repository is private during consolidation.
 >
 > **Prerequisite discipline:** each M-phase names the Schweep sprint gates (C#, from
@@ -171,6 +178,10 @@ measured and published honestly; merge re-runs policy per Loom's merge rules.
 three doors (SQL, typed, MCP): identical plans, identical counters.
 *Exit:* the M4 flagship demo driven end-to-end over MCP by the scripted agent; kill -9 matrix
 across the whole stack; soak with flat memory.
+*Correction (issue #12):* "soak with flat memory" was only ever validated at PR scale; the
+nightly-window soak dispatched at M6 close failed that same evening and had never been green.
+Root cause (awake tenants never compact capture history) and the fix are #12 / M8's maintenance
+work. The exit line above stands as written for the record; this annotation is the truth.
 
 ### M7 — Fleet plane and wake-on-delta *(needs M6)*
 Per-tenant pools (one substrate pool per tenant — Loom's isolation model, now the system's);
