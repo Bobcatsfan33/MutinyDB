@@ -1,23 +1,38 @@
 {
   "what": "M7 fleet simulation (docs/M7-FLEET.md): 10,000 tenants registered, written to, and slept on one mutinyd; resident memory measured while they sleep; a random subset of 200 receives deltas and wakes selectively (resident count asserted == woken count); wake-to-first-answer = one waking write + the first standing-SQL read, timed end-to-end through the HTTP door.",
   "test": "crates/mutinyd/tests/m7_fleet_sim.rs (M7_SIM_TENANTS=10000, release)",
-  "run": {
+  "published_run": {
+    "date": "2026-08-20",
+    "where": "CI — nightly.yml fleet-sim-10k, run 32326086573 (ubuntu-latest)",
+    "memory_ceiling": "systemd-run cgroup: MemoryMax=2G, MemorySwapMax=0 (plus the in-test 1.5 GiB assertion)",
+    "storage_backend": "local filesystem (GitHub-hosted runner SSD)",
+    "numbers": {
+      "tenants": 10000,
+      "woken": 200,
+      "wake_to_first_answer_ms": { "p50": 72.3, "p99": 406.6 },
+      "rss_curve_kib": [[3333, 32324], [6666, 51656], [9999, 75832]],
+      "rss_final_sleeping_kib": 75896,
+      "rss_after_wakes_kib": 453836,
+      "resident_bytes_per_sleeper_measured": 6684,
+      "resident_bytes_per_sleeper_bound": 24576,
+      "build_secs": 773
+    }
+  },
+  "corroborating_local_run": {
     "date": "2026-08-19",
-    "host": "Apple Silicon macOS (Darwin 24.6.0), local development machine",
+    "where": "Apple Silicon macOS (Darwin 24.6.0), local development machine, no cgroup ceiling",
     "storage_backend": "local filesystem (APFS, internal SSD)",
-    "mode": "release",
-    "memory_ceiling": "none on this host — the CI job that repeats this run (nightly.yml fleet-sim-10k) executes under a systemd-run cgroup with MemoryMax=2G, MemorySwapMax=0; the 1.5 GiB in-test budget is asserted in both"
+    "numbers": {
+      "tenants": 10000,
+      "woken": 200,
+      "wake_to_first_answer_ms": { "p50": 178.1, "p99": 225.1 },
+      "rss_curve_kib": [[3333, 66608], [6666, 148464], [9999, 177168]],
+      "rss_final_sleeping_kib": 174832,
+      "rss_after_wakes_kib": 154656,
+      "resident_bytes_per_sleeper_measured": 16985,
+      "resident_bytes_per_sleeper_bound": 24576,
+      "build_secs": 2636
+    }
   },
-  "numbers": {
-    "tenants": 10000,
-    "woken": 200,
-    "wake_to_first_answer_ms": { "p50": 178.1, "p99": 225.1 },
-    "rss_curve_kib": [[3333, 66608], [6666, 148464], [9999, 177168]],
-    "rss_final_sleeping_kib": 174832,
-    "rss_after_wakes_kib": 154656,
-    "resident_bytes_per_sleeper_measured": 16985,
-    "resident_bytes_per_sleeper_bound": 24576,
-    "build_secs": 2636
-  },
-  "read_the_conditions": "These are same-host, local-disk numbers and claim nothing about wide-area wake. The wide-area story lives on the component track (substrate get_batch + WarmPool, ~1 RTT median measured against Sydney at RTT~226ms) and is inherited, not re-measured here — see README 'Wake latency, honestly'. The per-sleeper resident cost is dominated by the registry row (full TenantConfig) plus allocator retention from registry serialization churn; the registry file itself is O(fleet) and rewritten atomically per state change, which is also why build_secs grows superlinearly and is not a gated number."
+  "read_the_conditions": "These are same-host, local-disk numbers and claim nothing about wide-area wake. The wide-area story lives on the component track (substrate get_batch + WarmPool, ~1 RTT median measured against Sydney at RTT~226ms) and is inherited, not re-measured here — see README 'Wake latency, honestly'. The per-sleeper resident cost is dominated by the registry row (full TenantConfig) plus allocator retention from registry serialization churn — the macOS/Linux gap (16,985 vs 6,684 bytes/sleeper) is allocator behavior, and both clear the 24,576 bound. The registry file is O(fleet) and rewritten atomically per state change, which is why build_secs grows superlinearly; build time is not a gated number."
 }
