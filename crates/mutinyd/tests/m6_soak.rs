@@ -311,16 +311,6 @@ fn the_soak_keeps_memory_flat_in_shape_and_budget() {
          {live_middle:.0} / {live_last:.0} KiB · residual thirds {first:.0} / {middle:.0} / \
          {last:.0} KiB · peak {peak} KiB (budget {RSS_BUDGET_KB})"
     );
-    assert!(
-        peak < RSS_BUDGET_KB,
-        "the budget: peak RSS {peak} KiB exceeded {RSS_BUDGET_KB} KiB"
-    );
-    assert!(
-        last <= middle * SHAPE_TOLERANCE,
-        "the shape: last-third residual RSS {last:.0} KiB (raw {raw_last:.0} minus live-data \
-         {live_last:.0}) grew beyond {SHAPE_TOLERANCE}× the middle third {middle:.0} KiB — \
-         memory is tracking something other than live data"
-    );
     // The tightened bound (docs/M4-TAINT.md § "The archive tier"): with resolved recalls
     // archived at every maintenance pass, the hot ledger itself is bounded — measured directly
     // as the ledger's parquet in the newest engine snapshot, the exact artifact that reached
@@ -344,7 +334,14 @@ fn the_soak_keeps_memory_flat_in_shape_and_budget() {
         let ledger_bytes = std::fs::metadata(&ledger_parquet)
             .map(|meta| meta.len())
             .unwrap_or(0);
-        println!("hot ledger snapshot: {ledger_bytes} B after {taints} taints");
+        let dedup_bytes = std::fs::metadata(snap.path().join("DEDUP"))
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        println!(
+            "hot ledger snapshot: {ledger_bytes} B after {taints} taints · engine DEDUP index: \
+             {dedup_bytes} B (the issue-#18 engine-track term, printed so a red shape names \
+             its cause; deliberately not asserted)"
+        );
         assert!(
             ledger_bytes <= 256 * 1024,
             "the hot taint ledger snapshot holds {ledger_bytes} B after {taints} taints — \
@@ -397,6 +394,16 @@ fn the_soak_keeps_memory_flat_in_shape_and_budget() {
         manifest_bytes + page_bytes
     );
 
+    assert!(
+        peak < RSS_BUDGET_KB,
+        "the budget: peak RSS {peak} KiB exceeded {RSS_BUDGET_KB} KiB"
+    );
+    assert!(
+        last <= middle * SHAPE_TOLERANCE,
+        "the shape: last-third residual RSS {last:.0} KiB (raw {raw_last:.0} minus live-data \
+         {live_last:.0}) grew beyond {SHAPE_TOLERANCE}× the middle third {middle:.0} KiB — \
+         memory is tracking something other than live data"
+    );
     let _ = request(address, "POST", "/shutdown", b"", Some(OPERATOR));
     let _ = child.wait();
 }
