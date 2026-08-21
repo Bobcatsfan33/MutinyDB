@@ -581,3 +581,105 @@ fn a_pending_mid_retraction_batch_is_completed_not_duplicated() {
         panic!("the completed pending retraction half-healed: {violations:?}");
     }
 }
+
+// ---- the archived ledger (M8's amendment; docs/M4-TAINT.md § "The archive tier") -------------
+
+/// **The regenerate-forever promise survives archival.** Both taints run, every resolved recall
+/// moves to the cold tier (the hot relation provably empties — a vacuous archival cannot pass),
+/// and the re-taints regenerate the FROZEN expected reports byte-for-byte from the archive.
+#[test]
+fn the_report_regenerates_from_an_archived_ledger() {
+    let world = world();
+    let archive = tempfile::tempdir().expect("archive dir");
+    let mut host = Host::build(&world.paths, &world.corpus).expect("host builds");
+    host.archive_dir = Some(archive.path().to_path_buf());
+    host.taint(&poison()).expect("first taint");
+    host.taint(&second_poison()).expect("second taint");
+
+    let stats = host.archive_ledger().expect("archival runs");
+    assert!(
+        stats.archived_rows > 0,
+        "the archival must move rows, or this gate is vacuous"
+    );
+    let again = host.archive_ledger().expect("re-archival runs");
+    assert_eq!(
+        again.archived_rows, 0,
+        "the hot relation must be empty after archival — rows moved, not copied"
+    );
+
+    // The heal state is untouched by where the ledger's bytes live.
+    let healed = host.standing_answers().expect("answers render");
+    assert_eq!(
+        healed,
+        oracle_answers(&world.corpus, &[&poison(), &second_poison()])
+    );
+
+    // Regeneration reads hot ∪ archive: with hot empty, the frozen reports must come back
+    // byte-identical from the cold tier alone.
+    let regenerated = host.taint(&poison()).expect("re-taint");
+    assert_eq!(regenerated.resolved, 0);
+    assert_eq!(regenerated.report.to_string(), EXPECTED_REPORT);
+    let second = host.taint(&second_poison()).expect("second re-taint");
+    assert_eq!(second.resolved, 0);
+    assert_eq!(second.report.to_string(), EXPECTED_SECOND_REPORT);
+}
+
+/// **An archival interrupted between the append and the hot retraction resumes cleanly**: the
+/// segment and manifest are durable, both tiers briefly hold the same rows, the union
+/// deduplicates, and the resumed archival retracts exactly once (content-addressed replay).
+#[test]
+fn an_archival_interrupted_after_the_append_resumes_idempotently() {
+    let world = world();
+    let archive = tempfile::tempdir().expect("archive dir");
+    let mut host = Host::build(&world.paths, &world.corpus).expect("host builds");
+    host.archive_dir = Some(archive.path().to_path_buf());
+    host.taint(&poison()).expect("taint");
+
+    let mut faults = TaintFaults::planned(TaintSeam::AfterArchiveAppend);
+    let interrupted = host.archive_ledger_with_faults(&mut faults);
+    assert!(interrupted.is_err(), "the planned seam must fire");
+
+    // Both tiers hold the rows now; the report is unchanged (union deduplicates)…
+    let mid = host.taint(&poison()).expect("re-taint mid-archival");
+    assert_eq!(mid.report.to_string(), EXPECTED_REPORT);
+
+    // …and the resumed archival finishes the retraction exactly once.
+    let resumed = host.archive_ledger().expect("resumed archival");
+    assert!(
+        resumed.archived_rows > 0,
+        "the resume must retract the rows"
+    );
+    let drained = host.archive_ledger().expect("post-resume archival");
+    assert_eq!(drained.archived_rows, 0);
+    let after = host.taint(&poison()).expect("re-taint post-archival");
+    assert_eq!(after.report.to_string(), EXPECTED_REPORT);
+}
+
+/// **Tooth (archive).** A deleted archive segment must be refused by name — the union is never
+/// silently smaller than the ledger promised. The catching instrument is the manifest
+/// integrity check inside every archive read.
+#[test]
+fn tooth_a_deleted_archive_segment_is_refused_by_name() {
+    let world = world();
+    let archive = tempfile::tempdir().expect("archive dir");
+    let mut host = Host::build(&world.paths, &world.corpus).expect("host builds");
+    host.archive_dir = Some(archive.path().to_path_buf());
+    host.taint(&poison()).expect("taint");
+    let stats = host.archive_ledger().expect("archival runs");
+    let segment = stats.segment.expect("a segment was written");
+
+    // THE BUG, constructed: the segment vanishes while the manifest still names it.
+    std::fs::remove_file(archive.path().join(&segment)).expect("the tooth deletes the segment");
+
+    let refusal = host.taint(&poison());
+    match refusal {
+        Err(error) => {
+            let text = error.to_string();
+            assert!(
+                text.contains("refusing to serve a smaller union"),
+                "the refusal must be named: {text}"
+            );
+        }
+        Ok(_) => panic!("a smaller union was served silently — the tooth was not caught"),
+    }
+}

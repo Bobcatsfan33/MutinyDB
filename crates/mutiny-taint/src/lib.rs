@@ -20,6 +20,9 @@ use schweep_zset::{DataType, Field, Row, Schema, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+pub mod archive;
+pub use archive::{ArchiveStats, ArchivedRow, LedgerArchive};
+
 /// The append-only taint journal: an ordinary relation on the ordinary epoch clock. It is what
 /// keeps the report regenerable after the heal has deleted its own evidence from the derivation
 /// relation, and it is never retracted.
@@ -53,6 +56,10 @@ pub enum TaintSeam {
     BetweenPayloadChannels,
     BeforeDerivationRetraction,
     BeforeReport,
+    /// Archival only (docs/M4-TAINT.md § "The archive tier"): after the segment and manifest are
+    /// durable, before the hot retraction — the widest window a crash can leave both tiers
+    /// holding the same rows.
+    AfterArchiveAppend,
 }
 
 /// A planned interruption. Inert by default; a planned seam fires exactly once.
@@ -120,6 +127,9 @@ pub struct TaintConfig {
     /// Every taint-healable payload table, by name. A contaminated row in a table absent here is
     /// a loud failure, not a skip.
     pub tables: BTreeMap<String, TaintTableSpec>,
+    /// The ledger's cold tier (docs/M4-TAINT.md § "The archive tier"). `None` keeps the whole
+    /// ledger hot — the pre-M8 posture, still valid for dev hosts.
+    pub archive_dir: Option<std::path::PathBuf>,
 }
 
 impl TaintConfig {
@@ -327,6 +337,8 @@ pub enum TaintError {
     Healer { branch: String, reason: String },
     #[error("the taint was interrupted at {seam:?}; calling taint again resumes it")]
     Interrupted { seam: TaintSeam },
+    #[error("the ledger archive failed: {reason}")]
+    Archive { reason: String },
     #[error(transparent)]
     Engine(#[from] ServerError),
 }
@@ -378,7 +390,11 @@ pub fn taint_with_faults(
     }
 
     // 2. Journal — before anything is healed, so the report survives its own success.
-    let prior = ledger_rows(engine, source)?;
+    let mut prior = ledger_rows(engine, source)?;
+    if let Some(dir) = &config.archive_dir {
+        // The union law: the ledger's memory is hot ∪ archive, and both tiers feed the report.
+        prior.extend(LedgerArchive::new(dir).rows_for(&source.system, &source.record_id)?);
+    }
     let ledger_epoch = journal(engine, config, source, &resolved)?;
     faults.hit(TaintSeam::AfterJournal)?;
 
@@ -655,6 +671,77 @@ fn journal(
             }
         }
     }
+}
+
+/// **Archival** (docs/M4-TAINT.md § "The archive tier"; runs only at a maintenance drain
+/// point, never inside a taint): move every resolved recall in the hot relation to the cold
+/// tier, then retract the moved rows through the ordinary ingest path under a content-addressed
+/// `taint-archive:` token — a replayed retraction is `DroppedAsReplay`, exactly like a replayed
+/// journal. Requires `config.archive_dir`; with the whole ledger hot this is a no-op.
+pub fn archive_resolved(
+    engine: &mut Engine,
+    config: &TaintConfig,
+) -> Result<ArchiveStats, TaintError> {
+    archive_resolved_with_faults(engine, config, &mut TaintFaults::inert())
+}
+
+/// [`archive_resolved`] with a planned interruption, for the archival crash gate.
+pub fn archive_resolved_with_faults(
+    engine: &mut Engine,
+    config: &TaintConfig,
+    faults: &mut TaintFaults,
+) -> Result<ArchiveStats, TaintError> {
+    let Some(dir) = &config.archive_dir else {
+        return Ok(ArchiveStats::default());
+    };
+    let sql = format!(
+        "SELECT {t}.source_system AS source_system, {t}.source_record AS source_record, \
+         {t}.branch AS branch, {t}.table_name AS table_name, {t}.row_key AS row_key, \
+         {t}.envelope AS envelope FROM {t}",
+        t = LEDGER_TABLE
+    );
+    let hot = answer_rows(engine, &sql)?;
+    if hot.is_empty() {
+        return Ok(ArchiveStats::default());
+    }
+    let mut rows = BTreeSet::new();
+    let mut entries = Vec::with_capacity(hot.len());
+    for row in &hot {
+        rows.insert(ArchivedRow {
+            source_system: string_column(row, 0)?,
+            source_record: string_column(row, 1)?,
+            branch: string_column(row, 2)?,
+            table: string_column(row, 3)?,
+            row_key_hex: string_column(row, 4)?,
+            envelope_hex: string_column(row, 5)?,
+        });
+        entries.push((row.clone(), -1));
+    }
+
+    // Segment first, manifest second (inside append), hot retraction last — the crash order the
+    // M4 doc states. The retraction token is the segment's own content address.
+    let archive = LedgerArchive::new(dir);
+    let segment = archive.append(&rows)?;
+    faults.hit(TaintSeam::AfterArchiveAppend)?;
+    let Some(segment_name) = segment else {
+        return Ok(ArchiveStats::default());
+    };
+    let token = format!("taint-archive:{segment_name}");
+    let ack = engine.ingest(&config.ledger_channel(), LEDGER_TABLE, &token, entries)?;
+    match ack {
+        Ack::Appended => {
+            engine.seal()?;
+        }
+        Ack::DroppedAsReplay => {
+            if engine.pending() > 0 {
+                engine.seal()?;
+            }
+        }
+    }
+    Ok(ArchiveStats {
+        archived_rows: rows.len() as u64,
+        segment: Some(segment_name),
+    })
 }
 
 fn payload_predicate(

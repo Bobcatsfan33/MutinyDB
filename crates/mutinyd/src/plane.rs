@@ -264,6 +264,18 @@ impl TenantPlane {
         if plane.checkpoint_path().exists() {
             plane.wake_from_checkpoint()?;
         } else {
+            // An archive is only ever created after a durable plane checkpoint (the coverage
+            // invariant, docs/M4-TAINT.md § "The archive tier") — so an archive manifest with no
+            // checkpoint is a doctored world, and full replay against an emptied hot ledger
+            // would serve poisoned answers in silence.
+            let archive_manifest = plane.tenant_dir.join("taint-archive").join("MANIFEST");
+            if archive_manifest.exists() {
+                return Err(PlaneError::Rejected(format!(
+                    "tenant {:?}: a ledger archive exists but plane-checkpoint.json is missing — \
+                     refusing full replay against an archived ledger (docs/M4-TAINT.md)",
+                    plane.name
+                )));
+            }
             let head = plane.store.head();
             if let Some(floor) = mutiny_bridge::collapsed_floor(&plane.store, head)? {
                 return Err(PlaneError::Rejected(format!(
@@ -496,6 +508,21 @@ impl TenantPlane {
         maintenance_seam("S1");
         self.write_plane_checkpoint()?; // S2
         maintenance_seam("S2");
+        // A (docs/M4-TAINT.md § "The archive tier"): resolved recalls move to the cold tier and
+        // leave the hot relation. STRICTLY after S2 — the coverage invariant: the hot retraction
+        // may only happen once a plane checkpoint covering the heals is durable, or a crash here
+        // would full-replay against an emptied ledger and serve poisoned answers (the seam-A
+        // crash gate constructed exactly that before this ordering). The next pass's compaction
+        // snapshots the shrunken relation. At the drain point no taint is in flight.
+        let taint_config = self.taint_config();
+        let archived = mutiny_taint::archive_resolved(&mut self.engine, &taint_config)?;
+        if archived.archived_rows > 0 {
+            self.metrics.inc(&format!(
+                "mutiny_ledger_archived_total{{tenant=\"{}\"}}",
+                self.name
+            ));
+        }
+        maintenance_seam("A");
         let pruned_pages = mutiny_bridge::prune_consumed(&self.store, self.commit_seq)?; // S3
         maintenance_seam("S3");
         let collapsed = mutiny_bridge::install_collapsed_root(&self.store)?; // S4
@@ -1473,6 +1500,7 @@ impl TenantPlane {
     fn taint_config(&self) -> TaintConfig {
         TaintConfig {
             tenant: self.name.clone(),
+            archive_dir: Some(self.tenant_dir.join("taint-archive")),
             tables: self
                 .config
                 .tables

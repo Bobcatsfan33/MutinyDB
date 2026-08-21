@@ -32,6 +32,20 @@ seam after each step named `S1..S6`:
    storage truncation** — it is the object that replaces the truncated history's recovery role.
    Crash after: checkpoint present, storage untruncated; both the checkpoint path and full
    replay are valid and agree.
+2½. **Ledger archival** (`A`, amended with the M8 hardening work; the contract lives in
+   docs/M4-TAINT.md § "The archive tier") — every resolved recall in the hot
+   `mutiny_taint_ledger` moves to the tenant's content-addressed cold archive, then is retracted
+   from the hot relation through the ordinary ingest path under a content-addressed
+   `taint-archive:` token. **Strictly after `S2`**: the hot retraction may only happen once a
+   plane checkpoint covering the heals is durable — the first draft ran archival before `S1`,
+   and the seam-A crash gate promptly constructed the consequence (a crash between the
+   retraction and the checkpoint full-replays against an emptied ledger and serves poisoned
+   answers); the ordering here is the corrected one, and the gate that found it is permanent.
+   A crash after the append and before the retraction leaves the rows in both tiers — the union
+   read deduplicates, and the retraction replays idempotently. The *next* pass's compaction
+   snapshots the shrunken relation. Every reader of the ledger's memory reads hot ∪ archive, so
+   the M4 regenerate-forever promise is untouched; recovery re-applies hot heals only, and an
+   archive manifest found without a plane checkpoint is refused by name.
 3. **Storage prune** (`S3`) — one ordinary WAL-committed transaction that `remove`s the
    application pages of every capture with `commit_seq ≤` the plane checkpoint's — the consumed
    prefix of the queue. The capture page (`u64::MAX`) is never touched: the resulting manifest
@@ -140,6 +154,17 @@ post-#14 nightly's residual "growth" (raw 85.7 MB against 8.2 MB of live data) w
 lazily-freed pages, counted by `ps` and invisible to reclaim accounting. The soak on Linux now
 measures `Rss − LazyFree` from `/proc/<pid>/smaps_rollup` — allocator-agnostic, and a genuine
 leak is never LazyFree, so it remains fully visible.
+
+The ledger archival work isolated one more O(commits) term, named here rather than absorbed:
+the engine snapshot's **`DEDUP` index** — replay-protection tokens for every ingest ever —
+grows ~170 B/commit on disk (620 KB by window 180 of a probe, dominating the snapshot once the
+ledger archives out) and costs a multiple of that resident. It is **engine-track**: the natural
+fix is a dedup horizon at the compaction anchor (the engine already refuses verification below
+compaction as `ReplayCompacted`, so the semantics exist), and the component is a locked
+snapshot this repository must not modify. The composed soak therefore bounds the **ledger's**
+snapshot directly and does not assert the index term; the residual shape gate remains, and if
+the index term ever turns a nightly red, that red is true signal pointing at the component track —
+the issue tracker carries it.
 
 The shape baseline moved for the same reason: the original gate compared the last third against
 the **first** third, and the first third is the warmup ramp from a cold start to the working
