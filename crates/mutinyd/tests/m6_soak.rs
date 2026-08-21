@@ -321,6 +321,36 @@ fn the_soak_keeps_memory_flat_in_shape_and_budget() {
          {live_last:.0}) grew beyond {SHAPE_TOLERANCE}× the middle third {middle:.0} KiB — \
          memory is tracking something other than live data"
     );
+    // The tightened bound (docs/M4-TAINT.md § "The archive tier"): with resolved recalls
+    // archived at every maintenance pass, the hot ledger itself is bounded — measured directly
+    // as the ledger's parquet in the newest engine snapshot, the exact artifact that reached
+    // ~15 MB and grew without bound pre-archival. (The snapshot's DEDUP index is a separate,
+    // engine-track O(commits) term, deliberately NOT asserted here — it is not the ledger.)
+    let log_dir = dir
+        .path()
+        .join("data")
+        .join("soak")
+        .join("compute")
+        .join("log");
+    let newest_snap = std::fs::read_dir(&log_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("snap-"))
+        .max_by_key(|entry| entry.file_name());
+    if let Some(snap) = newest_snap {
+        let ledger_parquet = snap.path().join("mutiny_taint_ledger.parquet");
+        let ledger_bytes = std::fs::metadata(&ledger_parquet)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        println!("hot ledger snapshot: {ledger_bytes} B after {taints} taints");
+        assert!(
+            ledger_bytes <= 256 * 1024,
+            "the hot taint ledger snapshot holds {ledger_bytes} B after {taints} taints — \
+             resolved recalls are not being archived"
+        );
+    }
 
     // The storage bound (docs/M8-MAINTENANCE.md, issue #12): awake maintenance must keep the
     // durable queue consumed — manifests and pages measured, not described. Pre-fix, this

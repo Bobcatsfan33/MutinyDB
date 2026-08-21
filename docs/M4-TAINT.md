@@ -45,6 +45,37 @@ otherwise leave an incident whose executed action can never again be tied to its
 RecallPlan is generated from the ledger plus the retraction receipts plus Loom's action ledger, and
 it is regenerable forever. The audit narrative cites envelopes because the ledger carries them.
 
+### The archive tier (amended at M8, docs/M8-MAINTENANCE.md)
+
+An append-only relation in the hot engine grows resident memory with every taint — measured at
+~10 KB/taint during the #12 work — so the ledger gains a **cold tier** without giving up one
+word of the promise above:
+
+- **The form**: content-addressed segment files (`taint-archive/<blake3-of-content>.json`) under
+  the tenant's own directory — durable, atomic (tmp+rename), never rewritten, and idempotent by
+  construction (re-archiving the same rows is the same file). Each segment carries the full
+  ledger rows, envelopes included.
+- **The union law**: every reader of the ledger's memory reads **hot ∪ archive**. A re-taint's
+  `prior` set and the RecallPlan's regeneration see archived entries exactly as they saw hot
+  ones; rows are set-valued, so the overlap a crash can leave between tiers deduplicates
+  structurally. The report generator's inputs are unchanged in meaning — only in where the bytes
+  live.
+- **When**: archival runs **only at the maintenance drain point** (docs/M8-MAINTENANCE.md step
+  A), never inside a taint — and **strictly after the pass's plane checkpoint is durable** (the
+  first draft ordered it before; the seam crash gate constructed the poisoned-answer consequence
+  and the ordering was corrected — the gate is permanent). At the drain point no taint is in
+  flight, so every hot entry is a resolved recall. The sequence is crash-ordered: append the
+  segment (idempotent), then retract the archived rows from the hot relation through the
+  ordinary ingest path (`-1` weights under a content-addressed `taint-archive:` token, so a
+  replayed retraction is `DroppedAsReplay`); the next pass's engine compaction snapshots the
+  shrunken relation.
+- **The coverage invariant**: archived entries are always covered by a plane checkpoint that was
+  durable *before* their hot retraction — recovery re-applies **hot** heals only, and that is
+  correct *because* membership in the checkpoint already excludes every key an archived heal
+  retracted. A tenant with an archive therefore always has a checkpoint, and full replay against
+  an archive manifest with no checkpoint is **refused by name**, exactly like a collapsed store
+  without one.
+
 ## The heal, in order
 
 The ordering is the crash-consistency argument, so it is normative:

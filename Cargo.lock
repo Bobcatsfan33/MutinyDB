@@ -804,6 +804,8 @@ dependencies = [
  "schweep-memo",
  "schweep-server",
  "schweep-zset",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

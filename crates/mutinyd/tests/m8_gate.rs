@@ -352,7 +352,7 @@ fn maintenance_bounds_the_queue_and_changes_no_answer() {
 /// present and the answers equal a never-crashed twin fed the identical acked workload.
 #[test]
 fn a_crash_on_every_maintenance_seam_recovers_to_the_twin() {
-    for seam in ["S1", "S2", "S3", "S4", "S5", "S6"] {
+    for seam in ["S1", "S2", "A", "S3", "S4", "S5", "S6"] {
         let world = spawn_binary(
             tempfile::tempdir().expect("dir"),
             "worker",
@@ -564,5 +564,91 @@ fn tooth_b_a_gc_that_reclaims_a_sleeping_tenants_pages_is_caught() {
         answer.status, 200,
         "a wake served from a swept store is the failure mode: {}",
         answer.body
+    );
+}
+
+/// **Maintenance archives the ledger and changes nothing observable** (docs/M4-TAINT.md § "The
+/// archive tier"): after the policy fires, the cold tier exists with a manifest, a re-taint of
+/// the archived source answers exactly like the never-maintained twin's (the union read), and
+/// the tenant sleeps and wakes to twin-identical answers with its heals now covered by the
+/// checkpoint instead of hot reapplication.
+#[test]
+fn maintenance_archives_the_ledger_and_changes_no_answer() {
+    let maintained = start("worker", 8);
+    let unmaintained = start("worker", 0);
+    for world in [&maintained, &unmaintained] {
+        for key in 0..8 {
+            assert!(write_event(
+                &world.http,
+                "worker",
+                &format!("evt-{key:05}"),
+                ("load", "window-0"),
+            ));
+        }
+        assert!(taint(&world.http, "worker", ("load", "window-0")));
+        // Cross the policy so the maintained world runs a pass (archiving the recall above).
+        for key in 8..18 {
+            assert!(write_event(
+                &world.http,
+                "worker",
+                &format!("evt-{key:05}"),
+                ("load", "window-1"),
+            ));
+        }
+    }
+
+    let manifest = maintained
+        .dir
+        .path()
+        .join("data")
+        .join("worker")
+        .join("taint-archive")
+        .join("MANIFEST");
+    assert!(
+        manifest.exists(),
+        "the maintenance pass must have archived the resolved recall — a missing cold tier \
+         makes this gate vacuous"
+    );
+
+    // The union read: a re-taint of the ARCHIVED source reports like the twin's hot-ledger one.
+    let archived_retaint = maintained.http.ok(
+        "POST",
+        "/v1/worker/taint",
+        serde_json::json!({"system": "load", "record": "window-0"})
+            .to_string()
+            .as_bytes(),
+        Some(OPERATOR),
+    );
+    let hot_retaint = unmaintained.http.ok(
+        "POST",
+        "/v1/worker/taint",
+        serde_json::json!({"system": "load", "record": "window-0"})
+            .to_string()
+            .as_bytes(),
+        Some(OPERATOR),
+    );
+    assert_eq!(
+        strip_epoch(&archived_retaint),
+        strip_epoch(&hot_retaint),
+        "the archived ledger must regenerate the same report the hot ledger does"
+    );
+
+    // Sleep and wake with the archive in place: the checkpoint covers the archived heals.
+    maintained.http.ok(
+        "POST",
+        "/fleet/sleep",
+        serde_json::json!({"tenant": "worker"})
+            .to_string()
+            .as_bytes(),
+        Some(OPERATOR),
+    );
+    assert_eq!(
+        rollup(&maintained.http, "worker"),
+        rollup(&unmaintained.http, "worker"),
+        "wake over an archived ledger must equal the never-maintained twin"
+    );
+    assert_eq!(
+        semantic(&maintained.http, "worker"),
+        semantic(&unmaintained.http, "worker")
     );
 }

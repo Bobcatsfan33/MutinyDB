@@ -180,6 +180,7 @@ pub fn taint_config() -> TaintConfig {
                 },
             ),
         ]),
+        archive_dir: None,
     }
 }
 

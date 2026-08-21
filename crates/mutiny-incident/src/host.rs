@@ -208,6 +208,9 @@ pub struct Host {
     /// (parent state bytes hydrated, nanoseconds) per durable fork — the O(state) evidence.
     pub fork_samples: Vec<(usize, u128)>,
     tainted: bool,
+    /// The ledger's cold tier for this world (docs/M4-TAINT.md § "The archive tier"). `None`
+    /// keeps the whole ledger hot — the pre-M8 posture.
+    pub archive_dir: Option<std::path::PathBuf>,
     records: Vec<ActionRecord>,
     branches: Vec<String>,
     /// Live mirror of the durable `mutiny_forks` relation, in commit order. Rebuilt by replay.
@@ -343,6 +346,7 @@ impl Host {
             commit_seq: 0,
             fork_samples: Vec::new(),
             tainted: false,
+            archive_dir: None,
             records: Vec::new(),
             branches,
             lineage_events: Vec::new(),
@@ -818,7 +822,8 @@ impl Host {
         faults: &mut mutiny_taint::TaintFaults,
     ) -> Result<TaintOutcome, HostError> {
         let actions = self.executed_actions();
-        let config = corpus::taint_config();
+        let mut config = corpus::taint_config();
+        config.archive_dir = self.archive_dir.clone();
         let mut healer = TrustHealer {
             operator: &self.operator,
             lineage: self.lineage()?,
@@ -835,6 +840,22 @@ impl Host {
         // epoch=commit bijection is over either way.
         self.tainted = true;
         outcome.map_err(HostError::from)
+    }
+
+    /// Archive every resolved recall to the cold tier (docs/M4-TAINT.md § "The archive tier").
+    pub fn archive_ledger(&mut self) -> Result<mutiny_taint::ArchiveStats, HostError> {
+        self.archive_ledger_with_faults(&mut mutiny_taint::TaintFaults::inert())
+    }
+
+    /// [`Self::archive_ledger`] with a planned interruption, for the archival crash gate.
+    pub fn archive_ledger_with_faults(
+        &mut self,
+        faults: &mut mutiny_taint::TaintFaults,
+    ) -> Result<mutiny_taint::ArchiveStats, HostError> {
+        let mut config = corpus::taint_config();
+        config.archive_dir = self.archive_dir.clone();
+        mutiny_taint::archive_resolved_with_faults(&mut self.engine, &config, faults)
+            .map_err(HostError::from)
     }
 
     /// Reopen after a crash: storage recovers, the engine replays its log and registry, pending
