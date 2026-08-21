@@ -45,9 +45,13 @@
       "admitted": false,
       "blockers": [
         "PrismDB has no release tag.",
-        "A live AWS KMS rotation/rollback receipt has not been produced in an authorized AWS account.",
         "Release admission remains blocked until the composed product and release gates pass."
-      ]
+      ],
+      "productionBlockers": [
+        "EXT-KMS (MD-7): the KMS provider is implemented and gated, but every gate run to date used the software keystore \u2014 live-service custody is unproven. Closure: the first enterprise adopter runs the encryption gate suite against their key service in their account; fallback, the direct AWS close before any production-approval claim. Simulated or emulated closure is forbidden by the gate's own criteria."
+      ],
+      "productionApproved": false,
+      "custodyReceipt": null
     },
     {
       "name": "schweep",
