@@ -42,6 +42,10 @@ jobs:
         with:
           python-version: "3.13"
       - run: python3 scripts/verify_component_lock.py
+      # MD-7's counter-check: doctored locks (approval without receipt / over blockers /
+      # without admission / without a release tag) must be REFUSED BY NAME, and the real lock
+      # must still pass. A verifier that cannot fail is not a verifier.
+      - run: python3 scripts/verify_component_lock_selftest.py
 
   component-compatibility:
     name: component compatibility (${{ matrix.component }})

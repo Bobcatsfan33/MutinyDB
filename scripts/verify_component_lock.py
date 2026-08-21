@@ -11,7 +11,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LOCK = ROOT / "components.lock.json"
+# The self-test doctors copies of the lock to prove the refusals fire; production use never
+# passes an argument. Tree verification always runs against the real imported directories.
+LOCK = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "components.lock.json"
 EXPECTED = {"substrate", "loomdb", "prismdb", "schweep"}
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -81,6 +83,35 @@ def main() -> None:
             isinstance(blockers, list) and blockers and all(isinstance(item, str) and item for item in blockers)
         ):
             fail(f"{name}: a quarantined component must name at least one blocker")
+
+        # MD-7: the release-vs-production split. Release admissibility is `admitted` (above,
+        # gated on the release tag and empty release blockers). Production approval is a
+        # SECOND, harder level: it requires release admission first, no open production
+        # blockers, and a named custody receipt — and the verifier refuses every shortcut.
+        production_blockers = component.get("productionBlockers")
+        if production_blockers is not None and not (
+            isinstance(production_blockers, list)
+            and all(isinstance(item, str) and item for item in production_blockers)
+        ):
+            fail(f"{name}: productionBlockers must be a list of non-empty strings")
+        custody_receipt = component.get("custodyReceipt")
+        if custody_receipt is not None and (not isinstance(custody_receipt, str) or not custody_receipt):
+            fail(f"{name}: custodyReceipt must be null or a non-empty receipt reference")
+        if component.get("productionApproved") is True:
+            if component.get("admitted") is not True:
+                fail(
+                    f"{name}: production approval without release admission is refused (MD-7)"
+                )
+            if production_blockers:
+                fail(
+                    f"{name}: production approval is refused while production blockers stand "
+                    f"(MD-7): {production_blockers}"
+                )
+            if not custody_receipt:
+                fail(
+                    f"{name}: production approval without a custody receipt is refused (MD-7) — "
+                    "the claim waits for the receipt, never the reverse"
+                )
 
         directory = ROOT / path
         if not directory.is_dir():
