@@ -74,6 +74,12 @@ next session on its own track: PrismDB's `EXT-KMS` text in `enterprise-readiness
 stated closure route, mirroring the `EXT-SCALE` partner-trigger language it already uses. Until
 PrismDB records that on its own track, this MD is the only place the closure path is normative.
 
+**Executed (2026-08-30, on PrismDB's own track):** PrismDB PR #44 (commit `004dcd7`, merge
+`cef63ea` — the tree all three `v0.1.0` artifact release tags name) records the partner-closure
+path and the direct-AWS fallback in its `docs/procurement-readiness.md` (now the normative home)
+and `enterprise-readiness.json` (the `EXT-KMS` `closure` field). The normative closure text lives
+in PrismDB; this record is now a pointer to it.
+
 ## Consequences
 
 - `components.lock.json` gains `productionBlockers` (and a `productionApproved` field the

@@ -3,9 +3,9 @@
 
 A verifier that cannot fail is not a verifier. Every doctored lock below encodes one specific
 lie — a production approval without a receipt, over standing blockers, without release
-admission, an admitted component with no tag — and the check asserts the verifier refuses it
-WITH THE NAMED MESSAGE, then asserts the real lock still passes. Runs in the same CI job as the
-verifier itself.
+admission, an admitted component with no tag, a PrismDB release admission with one of its three
+artifact tags absent — and the check asserts the verifier refuses it WITH THE NAMED MESSAGE,
+then asserts the real lock still passes. Runs in the same CI job as the verifier itself.
 """
 
 from __future__ import annotations
@@ -64,10 +64,8 @@ def expect_refusal(title: str, mutate, needle: str) -> None:
 
 
 def approve_without_receipt(document: dict) -> None:
+    # PrismDB is genuinely release-admitted in the real lock; the lie is the approval claim.
     prism = component(document, "prismdb")
-    prism["releaseTag"] = "prismdb-v9.9.9-doctored"
-    prism["admitted"] = True
-    prism["blockers"] = []
     prism["productionBlockers"] = []
     prism["productionApproved"] = True
     prism["custodyReceipt"] = None
@@ -75,24 +73,36 @@ def approve_without_receipt(document: dict) -> None:
 
 def approve_over_blockers(document: dict) -> None:
     prism = component(document, "prismdb")
-    prism["releaseTag"] = "prismdb-v9.9.9-doctored"
-    prism["admitted"] = True
-    prism["blockers"] = []
     prism["productionApproved"] = True
     prism["custodyReceipt"] = "doctored-receipt"
 
 
 def approve_without_admission(document: dict) -> None:
     prism = component(document, "prismdb")
+    prism["admitted"] = False
+    prism["blockers"] = ["doctored: release admission withdrawn"]
     prism["productionBlockers"] = []
     prism["productionApproved"] = True
     prism["custodyReceipt"] = "doctored-receipt"
 
 
 def admit_without_release(document: dict) -> None:
+    # The single-tag direction, proven on schweep: strip its release tag, keep it admitted.
+    schweep = component(document, "schweep")
+    schweep["releaseTag"] = None
+
+
+def drop_release_tag(tag: str):
+    def mutate(document: dict) -> None:
+        prism = component(document, "prismdb")
+        prism["releaseTags"] = [item for item in prism["releaseTags"] if item != tag]
+
+    return mutate
+
+
+def no_release_tags_at_all(document: dict) -> None:
     prism = component(document, "prismdb")
-    prism["admitted"] = True
-    prism["blockers"] = []
+    prism["releaseTags"] = None
 
 
 def main() -> None:
@@ -112,9 +122,26 @@ def main() -> None:
         "production approval without release admission is refused (MD-7)",
     )
     expect_refusal(
-        "admission while PrismDB's release tag does not exist",
+        "admission of a single-tag component whose release tag does not exist",
         admit_without_release,
         "an unreleased component cannot be admitted",
+    )
+    # MD-7 amendment: PrismDB's release is three artifact tags at one commit. Release
+    # admission with ANY of the three absent is refused by the missing artifact's name.
+    for artifact, tag in (
+        ("prismd", "prismd-v0.1.0"),
+        ("prism-shard", "prism-shard-v0.1.0"),
+        ("model-service", "model-service-v0.1.0"),
+    ):
+        expect_refusal(
+            f"PrismDB release admission with the {artifact} tag absent",
+            drop_release_tag(tag),
+            f"the {artifact} tag is absent",
+        )
+    expect_refusal(
+        "PrismDB release admission with no release tags at all",
+        no_release_tags_at_all,
+        "the prismd tag is absent",
     )
 
     code, output = run_verifier(LOCK)
