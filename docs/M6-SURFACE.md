@@ -7,16 +7,14 @@ loomd's MCP door and its propose-not-execute law; Prism's per-tenant quota and r
 fairness — it does not reinvent them, and where it deviates, the deviation is stated here with its
 reason.
 
-**Quarantine notice, first.** Every component this binary links is release-quarantined
-(`components.lock.json`, 0 admitted). `mutinyd` is therefore the *composed-development form* of
-the product binary: it is built, gated, and documented as the supported surface **shape**, and it
-becomes a supported, distributable artifact only when M8's release gates and the lock's blockers
-clear. It says so in `--help` and in `/health`. Nothing in this phase publishes an image or a
-binary.
+**Release notice, first.** All four components linked by this binary are release-admitted at the
+exact tags in `components.lock.json`. `mutinyd` v0.1 is a supported, distributable developer
+release for evaluation. Production approval is separate and remains blocked until MD-7 records
+an external-KMS custody receipt. `--help`, `/health`, and MCP `initialize` report that distinction.
 
 ## The versioning promise (an enterprise trust artifact, from day one)
 
-- The surface described here is **`v0`**, reported in `/health`, in MCP `initialize`
+- The surface described here is **`v0.1`**, reported in `/health`, in MCP `initialize`
   (`serverInfo`), and in `mutinyd --help`.
 - Until v1.0, changes to this surface are **additive only**: new endpoints, new tools, new
   response fields. Nothing documented here is renamed, removed, re-typed, or re-numbered except
@@ -45,9 +43,9 @@ bodies, no wall-clock headers). All paths are tenant-scoped: `/v1/<tenant>/…`.
 | --- | --- | --- |
 | `POST /v1/<t>/sql/register` | body = SQL text; `?unbounded=<reason>` for I-9 admission | handle number |
 | `POST /v1/<t>/sql/deregister?handle=` | — | `ok` |
-| `GET /v1/<t>/sql/read?handle=` | `&format=frames` for the log-frame body | `epoch N` + canonical rendering |
+| `GET /v1/<t>/sql/read?handle=` | `&format=json` for structured SDK output; `&format=frames` for the log-frame body | `epoch N` + canonical rendering by default |
 | `GET /v1/<t>/sql/oneshot?sql=` | or SQL in the body | canonical rendering |
-| `GET /v1/<t>/sql/subscribe?handle=&from=` | — | resume token + per-epoch deltas (below) |
+| `GET /v1/<t>/sql/subscribe?handle=&from=` | `&format=json` for structured SDK output | resume token + per-epoch deltas (below) |
 | `GET /v1/<t>/sql/plan?handle=` | — | the plan's s-expression rendering |
 
 The dialect served is Schweep's ladder, verbatim, through the engine's own binder — the inherited,
@@ -64,13 +62,13 @@ engine's own Rust API, which Schweep's I-6 corpus already proves plan-identical 
 
 | Method, path | Purpose |
 | --- | --- |
-| `POST /v1/<t>/write` | one storage commit through the M1 front door: `{actor, session, branch, intent, sources[], table, rows[][]}` — the envelope is **required and constructed here**; there is no write path that omits it (MD-2 R2, unbypassable by construction) |
+| `POST /v1/<t>/write` | one storage commit through the M1 front door: `{actor, session, branch, intent, sources[], table, rows[][]}` — the envelope is **required and constructed here**; there is no write path that omits it (MD-2 R2, unbypassable by construction); `?format=json` returns a structured receipt |
 | `POST /v1/<t>/session/open` | `{session}` → capability token (Loom's, serialized) |
 | `POST /v1/<t>/branch/fork` | `{session, from, child}` — M5's durable fork |
 | `POST /v1/<t>/branch/merge` | `{session, child, into}` — Loom's merge law, policy re-run, all-or-nothing |
 | `POST /v1/<t>/branch/rewind` | `{session, child}` — recorded, then torn down |
 | `POST /v1/<t>/query/register` · `/query/read` · `/query/oneshot` · `/query/subscribe` · `/query/plan` | the same engine operations as the SQL door, JSON-typed |
-| `GET /v1/<t>/semantic/answer?branch=&query=` · `GET /v1/<t>/semantic/groups?branch=&group=` | branch-scoped standing semantic answers (M2/M3 operators) |
+| `GET /v1/<t>/semantic/answer?branch=&query=` · `GET /v1/<t>/semantic/groups?branch=&group=` | branch-scoped standing semantic answers (M2/M3 operators); `query` is the configured standing ID and `?format=json` returns structured hits/groups |
 | `GET /v1/<t>/health` | epoch, registrations, pending, admission counters |
 
 **The operator door** — same HTTP surface, gated by the configured operator bearer token
@@ -200,5 +198,6 @@ circuit is expensive — read `explain-maintenance` for the handle and the per-e
 - The quickstart (README, verbatim, CI-run) is the supported five-minute path; the build that
   precedes it is stated honestly where it appears.
 
-M6 is a composition milestone, not release admission. The quarantine notice at the top governs;
-M7 (fleet) and M8 (hardening, audit, naming, release) remain open.
+M6 began as a composition milestone. Its surface now forms the v0.1 developer release, after all
+four exact component imports passed composed admission. M8's production hardening, external
+assurance, remote-tier wiring, and EXT-KMS custody work remain open and do not weaken that label.

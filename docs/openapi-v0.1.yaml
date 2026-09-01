@@ -1,0 +1,403 @@
+openapi: 3.1.0
+info:
+  title: MutinyDB HTTP API
+  version: 0.1.0
+  description: |
+    The stable additive v0.1 HTTP contract. Responses are canonical text unless a JSON schema is
+    shown. Agent-safe routes require no operator credential; mutating trust operations explicitly
+    declare the operator bearer token. See M6-SURFACE.md for wire and retry semantics.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: /
+    description: The host serving this contract; the local quickstart uses http://localhost:7654.
+security: []
+tags:
+  - {name: Standing queries, description: Incrementally maintained and one-shot SQL operations.}
+  - {name: Data, description: Provenance-enforced data admission.}
+  - {name: Agent worlds, description: Session and branch lifecycle operations.}
+  - {name: Semantic, description: Branch-scoped standing semantic results.}
+  - {name: Actions, description: Proposed and operator-executed external actions.}
+  - {name: Operations, description: Health and trust-maintenance operations.}
+paths:
+  /v1/{tenant}/health:
+    get:
+      summary: Read tenant health and release state
+      tags: [Operations]
+      operationId: health
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/write:
+    post:
+      summary: Commit provenance-enforced rows
+      tags: [Data]
+      operationId: write
+      parameters: [{$ref: '#/components/parameters/Tenant'}, {$ref: '#/components/parameters/JsonFormat'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WriteRequest'}
+      responses:
+        '200':
+          description: Canonical text or a structured write receipt.
+          content:
+            text/plain: {schema: {type: string}}
+            application/json: {schema: {$ref: '#/components/schemas/WriteReceipt'}}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/sql/register:
+    post:
+      summary: Register an incrementally maintained SQL query
+      tags: [Standing queries]
+      operationId: registerStandingQuery
+      parameters:
+        - {$ref: '#/components/parameters/Tenant'}
+        - name: unbounded
+          in: query
+          schema: {type: string}
+          description: Required justification when the boundedness checker requests one.
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema: {type: string}
+      responses:
+        '200':
+          description: Numeric standing-query handle.
+          content: {text/plain: {schema: {type: string, pattern: '^\\d+\\n?$'}}}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/sql/deregister:
+    post:
+      summary: Deregister a standing query
+      tags: [Standing queries]
+      operationId: deregisterStandingQuery
+      parameters:
+        - {$ref: '#/components/parameters/Tenant'}
+        - {$ref: '#/components/parameters/Handle'}
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/sql/read:
+    get:
+      summary: Read the current standing answer
+      tags: [Standing queries]
+      operationId: readStandingQuery
+      parameters:
+        - {$ref: '#/components/parameters/Tenant'}
+        - {$ref: '#/components/parameters/Handle'}
+        - {$ref: '#/components/parameters/ReadFormat'}
+      responses:
+        '200':
+          description: Canonical text, structured JSON, or frames according to `format`.
+          content:
+            text/plain: {schema: {type: string}}
+            application/json: {schema: {$ref: '#/components/schemas/StandingAnswer'}}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/sql/subscribe:
+    get:
+      summary: Resume standing-query deltas from a token
+      tags: [Standing queries]
+      operationId: subscribeStandingQuery
+      parameters:
+        - {$ref: '#/components/parameters/Tenant'}
+        - {$ref: '#/components/parameters/Handle'}
+        - name: from
+          in: query
+          required: true
+          schema: {type: integer, minimum: 0}
+        - {$ref: '#/components/parameters/JsonFormat'}
+      responses:
+        '200':
+          description: Canonical text or a structured resume token and delta list.
+          content:
+            text/plain: {schema: {type: string}}
+            application/json: {schema: {$ref: '#/components/schemas/Subscription'}}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/sql/plan:
+    get:
+      summary: Explain a registered standing-query plan
+      tags: [Standing queries]
+      operationId: explainStandingQuery
+      parameters:
+        - {$ref: '#/components/parameters/Tenant'}
+        - {$ref: '#/components/parameters/Handle'}
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/query/oneshot:
+    post:
+      summary: Execute a SQL query once
+      tags: [Standing queries]
+      operationId: oneShotQuery
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sql]
+              properties: {sql: {type: string}}
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/session/open:
+    post:
+      summary: Open an agent session and its branch
+      tags: [Agent worlds]
+      operationId: openSession
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session]
+              properties: {session: {type: string}}
+      responses:
+        '200':
+          description: Session branch and capability token.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session, branch, token]
+                properties:
+                  session: {type: string}
+                  branch: {type: string}
+                  token: {}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/branch/fork:
+    post:
+      summary: Fork an isolated agent world
+      tags: [Agent worlds]
+      operationId: forkBranch
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody: {$ref: '#/components/requestBodies/Fork'}
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/branch/merge:
+    post:
+      summary: Merge an agent world under current policy
+      tags: [Agent worlds]
+      operationId: mergeBranch
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session, child, into]
+              properties: {session: {type: string}, child: {type: string}, into: {type: string}}
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/branch/rewind:
+    post:
+      summary: Rewind an isolated agent world
+      tags: [Agent worlds]
+      operationId: rewindBranch
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session, child]
+              properties: {session: {type: string}, child: {type: string}}
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/semantic/answer:
+    get:
+      summary: Read a branch-scoped standing semantic answer
+      tags: [Semantic]
+      operationId: semanticAnswer
+      parameters:
+        - {$ref: '#/components/parameters/Tenant'}
+        - {name: branch, in: query, required: true, schema: {type: string}}
+        - {name: query, in: query, required: true, description: Configured standing-query ID, schema: {type: string}}
+        - {$ref: '#/components/parameters/JsonFormat'}
+      responses:
+        '200':
+          description: Ranked hits as canonical text or structured JSON.
+          content:
+            text/plain: {schema: {type: string}}
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/SemanticHit'}}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/semantic/groups:
+    get:
+      summary: Read branch-scoped standing semantic groups
+      tags: [Semantic]
+      operationId: semanticGroups
+      parameters:
+        - {$ref: '#/components/parameters/Tenant'}
+        - {name: branch, in: query, required: true, schema: {type: string}}
+        - {name: group, in: query, required: true, description: Configured standing-group ID, schema: {type: string}}
+        - {$ref: '#/components/parameters/JsonFormat'}
+      responses:
+        '200':
+          description: Groups as canonical text or structured JSON.
+          content:
+            text/plain: {schema: {type: string}}
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/SemanticGroup'}}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/action/propose:
+    post:
+      summary: Propose an external action without executing it
+      tags: [Actions]
+      operationId: proposeAction
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ActionProposal'}
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/action/execute:
+    post:
+      summary: Execute an approved action as an operator
+      tags: [Actions]
+      operationId: executeAction
+      security: [{operatorBearer: []}]
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [proposal]
+              properties: {proposal: {type: string}}
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+  /v1/{tenant}/taint:
+    post:
+      summary: Retract a poisoned source and heal standing state
+      tags: [Operations]
+      operationId: taintSource
+      security: [{operatorBearer: []}]
+      parameters: [{$ref: '#/components/parameters/Tenant'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SourceRef'}
+      responses:
+        '200': {$ref: '#/components/responses/Text'}
+        4XX: {$ref: '#/components/responses/Error'}
+        5XX: {$ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    operatorBearer: {type: http, scheme: bearer}
+  parameters:
+    Tenant: {name: tenant, in: path, required: true, schema: {type: string, pattern: '^[^/.][^/]*$'}}
+    Handle: {name: handle, in: query, required: true, schema: {type: integer, minimum: 0}}
+    JsonFormat: {name: format, in: query, required: false, schema: {type: string, enum: [json]}}
+    ReadFormat: {name: format, in: query, required: false, schema: {type: string, enum: [json, frames]}}
+  responses:
+    Text:
+      description: Canonical MutinyDB text response.
+      content: {text/plain: {schema: {type: string}}}
+    Error:
+      description: Refused, NotFound, Rejected, Overloaded, or Internal. Only 429 is retryable.
+      content: {text/plain: {schema: {type: string}}}
+  requestBodies:
+    Fork:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [session, from, child]
+            properties: {session: {type: string}, from: {type: string}, child: {type: string}}
+  schemas:
+    SourceRef:
+      type: object
+      additionalProperties: false
+      required: [system, record]
+      properties: {system: {type: string}, record: {type: string}}
+    WriteRequest:
+      type: object
+      additionalProperties: false
+      required: [actor, session, branch, intent, sources, table, rows]
+      properties:
+        actor: {type: string}
+        session: {type: string}
+        branch: {type: string}
+        intent: {type: string}
+        sources: {type: array, items: {$ref: '#/components/schemas/SourceRef'}}
+        table: {type: string}
+        rows: {type: array, items: {type: array}}
+    ActionProposal:
+      type: object
+      additionalProperties: false
+      required: [actor, branch, action_type, target, idempotency_key]
+      properties:
+        actor: {type: string}
+        branch: {type: string}
+        action_type: {type: string}
+        target: {type: string}
+        idempotency_key: {type: string}
+        justified_by: {type: array, items: {type: string}}
+    StandingAnswer:
+      type: object
+      required: [epoch, answer]
+      properties: {epoch: {type: integer, minimum: 0}, answer: {type: string}}
+    WriteReceipt:
+      type: object
+      required: [commit, epoch, rows]
+      properties:
+        commit: {type: integer, minimum: 1}
+        epoch: {type: [integer, 'null'], minimum: 0}
+        rows: {type: integer, minimum: 0}
+    Subscription:
+      type: object
+      required: [token, deltas]
+      properties:
+        token: {type: integer, minimum: 0}
+        deltas:
+          type: array
+          items: {$ref: '#/components/schemas/StandingAnswer'}
+    SemanticHit:
+      type: object
+      required: [rank, key, score]
+      properties: {rank: {type: integer, minimum: 1}, key: {type: string}, score: {type: number}}
+    SemanticGroup:
+      type: object
+      required: [group_id, count, avg_cost, error_rate, exemplar_key, member_keys]
+      properties:
+        group_id: {type: string}
+        count: {type: integer, minimum: 0}
+        avg_cost: {type: number}
+        error_rate: {type: number, minimum: 0, maximum: 1}
+        exemplar_key: {type: string}
+        member_keys: {type: array, items: {type: string}}

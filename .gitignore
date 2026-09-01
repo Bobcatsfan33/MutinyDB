@@ -2,3 +2,10 @@
 **/*.rs.bk
 *.pdb
 .DS_Store
+node_modules/
+dist/
+__pycache__/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.venv/

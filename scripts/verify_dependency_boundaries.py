@@ -47,7 +47,7 @@ ALLOWED_COMPONENT_EDGES = {
         "substrate-pager",
     },
     # M6: mutinyd is the one surface — the composed-development form of the product binary
-    # (docs/M6-SURFACE.md's quarantine notice governs its distribution). It composes every plane
+    # (docs/M6-SURFACE.md's release notice governs its distribution). It composes every plane
     # behind one admission boundary, which is why its reviewed edge set is the union.
     # M7 adds schweep-plan + schweep-sql: the fleet's delta->circuit mapping is an OBSERVATION —
     # the engine's persisted registration file read back through the compute plane's public

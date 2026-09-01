@@ -33,6 +33,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  client-contracts:
+    name: public clients (${{ matrix.client }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [python, typescript]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        if: matrix.client == 'python'
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: matrix.client == 'typescript'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Test Python client
+        if: matrix.client == 'python'
+        run: |
+          PYTHONPATH=sdk/python/src python3 -m unittest discover -s sdk/python/tests -v
+          python3 -m pip wheel --no-deps --wheel-dir /tmp/mutinydb-wheel sdk/python
+      - name: Test TypeScript client
+        if: matrix.client == 'typescript'
+        working-directory: sdk/typescript
+        run: npm ci && npm run lint:api && npm test
+
   component-integrity:
     name: exact component imports and honest admission
     runs-on: ubuntu-latest
@@ -46,6 +75,21 @@ jobs:
       # without admission / without a release tag) must be REFUSED BY NAME, and the real lock
       # must still pass. A verifier that cannot fail is not a verifier.
       - run: python3 scripts/verify_component_lock_selftest.py
+
+  sdk-e2e:
+    name: public SDK against real mutinyd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - run: cargo build -p mutinyd --locked
+      - run: ./scripts/run_sdk_smoke.sh
 
   component-compatibility:
     name: component compatibility (${{ matrix.component }})
@@ -225,7 +269,9 @@ jobs:
         run: M6_SOAK_SECS=30 cargo test -p mutinyd --locked --test m6_soak -- --nocapture
       - name: Run the flagship end-to-end over MCP (the supported demo form)
         run: |
-          cargo run -p mutinyd --locked --example incident_demo_mcp -- --help | grep -q "NOT a supported"
+          help="$(cargo run -p mutinyd --locked --example incident_demo_mcp -- --help)"
+          grep -q "developer release" <<<"$help"
+          grep -q "not approved for production" <<<"$help"
           cargo run -p mutinyd --locked --example incident_demo_mcp > /dev/null
 
   m6-quickstart:
@@ -317,7 +363,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [component-integrity, component-compatibility, fmt, clippy, test, m1-bridge, m2-semantic, m3-trust, m4-taint, m5-forks, m6-surface, m6-quickstart, m7-fleet, m8-maintenance, no-egress]
+    needs: [client-contracts, sdk-e2e, component-integrity, component-compatibility, fmt, clippy, test, m1-bridge, m2-semantic, m3-trust, m4-taint, m5-forks, m6-surface, m6-quickstart, m7-fleet, m8-maintenance, no-egress]
     if: always()
     steps:
       - name: Fail if any job did not succeed

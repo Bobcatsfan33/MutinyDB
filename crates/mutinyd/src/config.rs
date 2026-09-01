@@ -6,12 +6,16 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// The surface version every door reports (docs/M6-SURFACE.md's versioning promise).
-pub const SURFACE_VERSION: &str = "v0";
+pub const SURFACE_VERSION: &str = "v0.1";
 
-/// The statement `--help` and `/health` carry (MD-6's quarantine, said out loud).
-pub const QUARANTINE_NOTICE: &str = "composed-development build: every linked component is \
-     release-quarantined (components.lock.json); NOT a supported or distributable artifact until \
-     M8's release gates clear";
+/// The release state every door reports. The developer release is distributable and supported
+/// for evaluation; production approval remains deliberately separate until MD-7's external-KMS
+/// custody receipt exists.
+pub const RELEASE_NOTICE: &str = "developer release: all four components are release-admitted; \
+     supported for evaluation, not approved for production until the EXT-KMS custody gate clears";
+
+/// Source-compatible alias for clients written against the pre-release surface.
+pub const QUARANTINE_NOTICE: &str = RELEASE_NOTICE;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

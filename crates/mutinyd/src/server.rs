@@ -6,7 +6,7 @@
 //! loud tenant fills its own queue and answers `Overloaded`; it cannot occupy another tenant's
 //! worker. Determinism per tenant is schweepd's one-thread-one-engine law, kept.
 
-use crate::config::{Config, QuotaConfig, TenantConfig, QUARANTINE_NOTICE, SURFACE_VERSION};
+use crate::config::{Config, QuotaConfig, TenantConfig, RELEASE_NOTICE, SURFACE_VERSION};
 use crate::metrics::{trace, Metrics};
 use crate::plane::{PlaneError, TenantPlane, WriteRequest};
 use schweep_server::wire::{respond, respond_error, ErrorKind};
@@ -976,6 +976,11 @@ fn dispatch(
                 return Ok(Reply::Bytes(plane.read_frames(handle)?));
             }
             let (epoch, answer) = plane.read(handle)?;
+            if request.query.get("format").map(String::as_str) == Some("json") {
+                return Ok(Reply::Json(
+                    serde_json::json!({"epoch": epoch, "answer": answer}),
+                ));
+            }
             Ok(Reply::Text(format!("epoch {epoch}\n{answer}")))
         }
         ("GET", ["sql", "oneshot"]) => {
@@ -991,6 +996,14 @@ fn dispatch(
         }
         ("GET", ["sql", "subscribe"] | ["query", "subscribe"]) => {
             let (next, deltas) = plane.subscribe(u64_param("handle")?, u64_param("from")?)?;
+            if request.query.get("format").map(String::as_str) == Some("json") {
+                return Ok(Reply::Json(serde_json::json!({
+                    "token": next,
+                    "deltas": deltas.iter().map(|delta| serde_json::json!({
+                        "epoch": delta.epoch, "answer": delta.rendered,
+                    })).collect::<Vec<_>>(),
+                })));
+            }
             let mut out = format!("token {next}\nepochs {}\n", deltas.len());
             for delta in deltas {
                 out.push_str(&format!("epoch {}\n{}", delta.epoch, delta.rendered));
@@ -1032,6 +1045,11 @@ fn dispatch(
                 table: field(&body, "table")?,
                 rows,
             })?;
+            if request.query.get("format").map(String::as_str) == Some("json") {
+                return Ok(Reply::Json(serde_json::json!({
+                    "commit": receipt.commit_seq, "epoch": receipt.epoch, "rows": receipt.rows,
+                })));
+            }
             Ok(Reply::Text(format!(
                 "commit {}\nepoch {}\nrows {}\n",
                 receipt.commit_seq,
@@ -1074,6 +1092,17 @@ fn dispatch(
         }
         ("GET", ["semantic", "answer"]) => {
             let hits = plane.semantic_answer(&param("branch")?, &param("query")?)?;
+            if request.query.get("format").map(String::as_str) == Some("json") {
+                return Ok(Reply::Json(serde_json::Value::Array(
+                    hits.iter()
+                        .map(|hit| {
+                            serde_json::json!({
+                                "rank": hit.rank, "key": hit.key, "score": hit.score,
+                            })
+                        })
+                        .collect(),
+                )));
+            }
             let mut out = String::new();
             for hit in hits {
                 out.push_str(&format!(
@@ -1085,6 +1114,23 @@ fn dispatch(
         }
         ("GET", ["semantic", "groups"]) => {
             let groups = plane.semantic_groups(&param("branch")?, &param("group")?)?;
+            if request.query.get("format").map(String::as_str) == Some("json") {
+                return Ok(Reply::Json(serde_json::Value::Array(
+                    groups
+                        .iter()
+                        .map(|group| {
+                            serde_json::json!({
+                                "group_id": group.group_id,
+                                "count": group.count,
+                                "avg_cost": group.avg_cost,
+                                "error_rate": group.error_rate,
+                                "exemplar_key": group.exemplar_key,
+                                "member_keys": group.member_keys,
+                            })
+                        })
+                        .collect(),
+                )));
+            }
             let mut out = String::new();
             for group in groups {
                 out.push_str(&format!(
@@ -1162,5 +1208,5 @@ fn dispatch(
 /// The banner every door reports.
 #[must_use]
 pub fn banner() -> String {
-    format!("mutinyd {SURFACE_VERSION} — {QUARANTINE_NOTICE}")
+    format!("mutinyd {SURFACE_VERSION} — {RELEASE_NOTICE}")
 }

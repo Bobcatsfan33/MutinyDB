@@ -1376,9 +1376,9 @@ impl TenantPlane {
 
     pub fn health(&self) -> String {
         format!(
-            "surface {}\nquarantine {}\ntenant {}\ncommit_seq {}\nembedding {}:{}\n{}",
+            "surface {}\nrelease_notice {}\ntenant {}\ncommit_seq {}\nembedding {}:{}\n{}",
             crate::config::SURFACE_VERSION,
-            crate::config::QUARANTINE_NOTICE,
+            crate::config::RELEASE_NOTICE,
             self.name,
             self.commit_seq,
             self.embedding.dim,

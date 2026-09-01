@@ -1,9 +1,9 @@
 # M6 — mutinyd: one process, one admission boundary, three doors (docs/M6-SURFACE.md).
 #
-# THE QUARANTINE NOTICE GOVERNS: every component this binary links is release-quarantined
-# (components.lock.json, 0 admitted), so mutinyd is the composed-development form of the product
-# binary — built, gated, and documented as the supported surface SHAPE, distributable only when
-# M8's release gates and the lock's blockers clear. --help and /health say so.
+# v0.1 developer release. All linked components are admitted at exact release tags. Distribution
+# is by checksummed GitHub artifacts and GHCR rather than crates.io; production approval remains
+# gated
+# on MD-7's external-KMS custody receipt. --help and /health report that state.
 [package]
 name = "mutinyd"
 version = "0.1.0"

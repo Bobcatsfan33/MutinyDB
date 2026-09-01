@@ -232,6 +232,27 @@ fn the_composed_surface_serves_and_stays_current() {
     );
     assert!(after.contains("17000000"), "{after}");
 
+    // SDK-facing JSON is additive: canonical text remains the default, while structured clients
+    // never need to parse a human rendering.
+    let structured: serde_json::Value = serde_json::from_str(&http.ok(
+        "GET",
+        &format!("/v1/acme/sql/read?handle={handle}&format=json"),
+        b"",
+        None,
+    ))
+    .expect("structured standing answer");
+    assert_eq!(structured["epoch"], 3);
+    assert!(structured["answer"].as_str().unwrap().contains("17000000"));
+    let subscription: serde_json::Value = serde_json::from_str(&http.ok(
+        "GET",
+        &format!("/v1/acme/sql/subscribe?handle={handle}&from=2&format=json"),
+        b"",
+        None,
+    ))
+    .expect("structured subscription");
+    assert!(subscription["token"].as_u64().is_some());
+    assert!(subscription["deltas"].as_array().is_some());
+
     // Branch lifecycle over the wire, with inheritance visible in the semantic door.
     let fork = serde_json::json!({"session": "sess-a", "from": "sess-a", "child": "hyp-a"});
     http.ok(
@@ -242,14 +263,25 @@ fn the_composed_surface_serves_and_stays_current() {
     );
     let inherited = http.ok(
         "GET",
-        "/v1/acme/semantic/answer?branch=hyp-a&query=incident-similar",
+        "/v1/acme/semantic/answer?branch=hyp-a&query=incident-similar&format=json",
         b"",
         None,
     );
-    assert!(inherited.contains("evt-1"), "{inherited}");
+    let inherited: serde_json::Value =
+        serde_json::from_str(&inherited).expect("structured semantic answer");
+    assert_eq!(inherited[0]["key"], "evt-1");
+    let groups: serde_json::Value = serde_json::from_str(&http.ok(
+        "GET",
+        "/v1/acme/semantic/groups?branch=hyp-a&group=incident-groups&format=json",
+        b"",
+        None,
+    ))
+    .expect("structured semantic groups");
+    assert!(groups.as_array().is_some_and(|items| !items.is_empty()));
 
     let health = http.ok("GET", "/v1/acme/health", b"", None);
-    assert!(health.contains("surface v0") && health.contains("quarantine"));
+    assert!(health.contains("surface v0.1") && health.contains("release_notice"));
+    assert!(health.contains("not approved for production"));
     let metrics = http.ok("GET", "/metrics", b"", None);
     assert!(metrics.contains("mutiny_admitted_total{tenant=\"acme\",door=\"sql\"}"));
     assert!(metrics.contains("mutiny_admitted_total{tenant=\"acme\",door=\"typed\"}"));
