@@ -7,7 +7,8 @@
 **Every answer current. Every fact accountable. Every world forkable.**
 
 [![CI](https://github.com/Bobcatsfan33/MutinyDB/actions/workflows/ci.yml/badge.svg)](https://github.com/Bobcatsfan33/MutinyDB/actions)
-[![Status](https://img.shields.io/badge/status-pre--release%20consolidation-orange.svg)](#status--what-is-and-is-not-ready)
+[![Release](https://img.shields.io/badge/release-v0.1%20developer-blue.svg)](#status--what-is-and-is-not-ready)
+[![API](https://img.shields.io/badge/API-OpenAPI%203.1-6BA539.svg)](docs/openapi-v0.1.yaml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 </div>
@@ -28,7 +29,7 @@ It is built for the client that breaks every database designed for humans: the A
 asks the same questions at machine frequency, derives facts from sources that can turn out to be
 poisoned, and needs to try three hypotheses without committing to any of them.
 
-## The query no other database can run
+## The product north star
 
 ```sql
 SELECT m.claim_id, m.confidence, e.event_id, r.revenue_impact
@@ -43,7 +44,11 @@ LIMIT 20;
 ```
 
 Meaning, scalars, branch scope, and provenance in one plan — and the answer is *standing*: it
-maintains itself as data changes, on the agent's own fork of the world.
+maintains itself as data changes, on the agent's own fork of the world. This exact combined SQL
+syntax is the north-star dialect, not a v0.1 claim: v0.1 deliberately refuses these extension
+tokens by name instead of accepting and ignoring them. The same capabilities are executable
+today through the standing-SQL, typed semantic, branch, provenance, and MCP doors demonstrated
+below; the combined binder remains the next language milestone.
 
 ## Three capabilities that exist nowhere else
 
@@ -92,7 +97,8 @@ not by convention:
 
 Binding contracts: [`CONSOLIDATION-ROADMAP.md`](CONSOLIDATION-ROADMAP.md) ·
 [`docs/decisions`](docs/decisions) · [MD-6](docs/decisions/MD-6.md) (one-repository topology with
-exact source provenance).
+exact source provenance) · [`docs/ADOPTION-ROADMAP.md`](docs/ADOPTION-ROADMAP.md) (product and
+ecosystem milestones).
 
 ## Built from proven parts — admitted only once proven together
 
@@ -162,9 +168,9 @@ mounted-oracle job). The two named open items are
   nothing compacted it. The finding is preserved in
   [#12](https://github.com/Bobcatsfan33/MutinyDB/issues/12); the M8 maintenance work closes it,
   and the soak stayed red — deliberately — until it did. The quickstart below runs verbatim in
-  CI. `mutinyd` remains the
-  composed-development form of the binary — the quarantine notice in
-  [`docs/M6-SURFACE.md`](docs/M6-SURFACE.md) governs until M8.
+  CI. `mutinyd` is now the v0.1 developer-release binary: distributable and supported for
+  evaluation. The production-only external-KMS custody gate remains explicit in
+  [`docs/M6-SURFACE.md`](docs/M6-SURFACE.md).
 
 - **M7 — the fleet plane.** Tenants register, sleep, wake, and are removed **without a
   restart**, from a durable registry a crashed `mutinyd` recovers. Sleep = drain → compact →
@@ -198,6 +204,25 @@ track, where the machinery lives. The composed `mutinyd` path currently runs loc
 tenant stores (the imported Loom flavor is air-gapped by this repository's own pinning);
 **wiring `substrate-store`'s remote tier under the composed store is open and named on M8's
 ledger** — it inherits, not re-proves, the ≈1-RTT property. No unqualified latency claim is made.
+
+## Install
+
+Prebuilt macOS and Linux binaries and multi-architecture containers are produced from
+`mutinydb-v*` tags. Downloads are checksum-verified by the installer:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/Bobcatsfan33/MutinyDB/main/scripts/install.sh | sh
+mutinyd init
+mutinyd mutinydb.json
+```
+
+Or run the published container with `docker compose up -d`. From a source checkout, use
+`docker compose up --build -d`.
+
+Public clients live in [`sdk/python`](sdk/python) and [`sdk/typescript`](sdk/typescript); the
+machine-readable HTTP contract is [`docs/openapi-v0.1.yaml`](docs/openapi-v0.1.yaml). Agent
+frameworks can use MCP over stdio or `POST /v1/<tenant>/mcp` without an SDK.
 
 ## Run the flagship in five minutes
 
@@ -249,7 +274,7 @@ docker rm -f mutiny-quickstart
 
 ## Status — what is and is not ready
 
-**Not approved for production. Not a software release candidate.**
+**v0.1 developer release: supported for evaluation, not approved for production.**
 
 M8 is **in progress**. Its first item is closed:
 [#12](https://github.com/Bobcatsfan33/MutinyDB/issues/12) — awake tenants now run the
@@ -258,10 +283,9 @@ WAL checkpoint → GC, `docs/M8-MAINTENANCE.md`), the crash path is checkpoint-a
 replay of a collapsed store refused by name, and the nightly soak gates the result at the full
 window with storage measured.
 
-Still open, named rather than implied: external assurance, the `mutinydb-v0.1` product release,
-and the *supported* status of `mutinyd` (the binary exists and is gated; its four components are
-now release-admitted at exact tags, but the product's own release gates and external assurance
-remain open, so it is not yet a distributable artifact); the remote object tier
+The release workflow now builds checksum-verified macOS/Linux binaries and a multi-architecture
+GHCR image from a matching `mutinydb-v*` tag. Still open, named rather than implied: production
+approval and external assurance; the remote object tier
 under the composed store (M8's ledger, see the wake-latency table); and O(1) fork of live
 answers, which MD-5 deliberately moved post-v1 with its spike evidence on record. Schweep's
 `current-v0.1` and PrismDB's three `v0.1.0` artifact tags are released and re-pinned;
@@ -272,7 +296,7 @@ runs on exit gates, not dates.
 
 | Phase | M1 bridge | M2 semantic | M3 trust | M4 taint | M5 forks | M6 mutinyd | M7 fleet | M8 release |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◎ |
+| | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | developer release |
 
 ## The evidence culture
 
@@ -299,6 +323,6 @@ product result. We would rather you read the tests than the marketing.
 ## License
 
 **Apache-2.0** — see [LICENSE](LICENSE). Permanently, because a durability claim nobody can audit
-is worth nothing. The license is not the release: the product remains **not approved for
-production** until M8's release and naming-clearance gates pass, and nothing in this repository
-carries a warranty that its own gates do not prove.
+is worth nothing. The v0.1 developer release remains **not approved for production** until the
+external-assurance and EXT-KMS custody gates pass, and nothing in this repository carries a
+warranty that its own gates do not prove.

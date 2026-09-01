@@ -5,9 +5,9 @@ be added, removed, slept, and woken without restarting `mutinyd`; a sleeping ten
 on the storage backend plus a registry row and **nothing resident**; a wake whose cost is
 O(checkpoint + suffix), not O(history); and wake-on-delta — an arriving delta wakes the tenant it
 belongs to and only the circuits it feeds, with the delta→circuit mapping **observed from the
-compute plane**, exactly as MD-1 R2 anticipated. The quarantine discipline is unchanged: this is
-still the composed-development form of the product; nothing here alters any component's release
-admission.
+compute plane**, exactly as MD-1 R2 anticipated. Release admission remains evidence-based: this
+is the v0.1 developer-release form of the product, and nothing here alters any component's exact
+admission record or the production-only external-KMS gate.
 
 ## The prerequisite: bounded wake (the economics are impossible without it)
 

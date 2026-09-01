@@ -6,7 +6,7 @@
 //! there with it because MutinyDB's taint heals rather than dry-runs (the AT-024 argument,
 //! restated in M6-SURFACE).
 
-use crate::config::{QUARANTINE_NOTICE, SURFACE_VERSION};
+use crate::config::{RELEASE_NOTICE, SURFACE_VERSION};
 use crate::plane::{PlaneError, TenantPlane, WriteRequest};
 use schweep_server::wire::ErrorKind;
 use serde_json::{json, Value};
@@ -74,7 +74,7 @@ pub fn handle(plane: &mut TenantPlane, request: &Value) -> Value {
                 "serverInfo": {
                     "name": "mutinyd",
                     "version": SURFACE_VERSION,
-                    "notice": QUARANTINE_NOTICE,
+                    "notice": RELEASE_NOTICE,
                 },
             }),
         ),

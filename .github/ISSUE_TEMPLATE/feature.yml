@@ -1,0 +1,15 @@
+name: Feature proposal
+description: Propose a user outcome, protocol addition, or integration
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes: {label: Agent workflow, description: What is the agent trying to accomplish and where does it fail today?}
+    validations: {required: true}
+  - type: textarea
+    attributes: {label: Proposed contract, description: Show the smallest API, SQL, MCP, or operational contract that solves it.}
+    validations: {required: true}
+  - type: textarea
+    attributes: {label: Correctness evidence, description: Which oracle, invariant, or failure test should prove this works?}
+  - type: textarea
+    attributes: {label: Alternatives, description: What can users do today and why is it insufficient?}

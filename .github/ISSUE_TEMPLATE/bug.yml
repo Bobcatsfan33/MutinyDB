@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a reproducible MutinyDB defect
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    attributes: {label: What happened?, description: Include the expected and actual result.}
+    validations: {required: true}
+  - type: input
+    attributes: {label: MutinyDB version, placeholder: mutinydb-v0.1.0 or commit SHA}
+    validations: {required: true}
+  - type: textarea
+    attributes: {label: Minimal reproduction, description: Include config with secrets removed and exact commands.}
+    validations: {required: true}
+  - type: textarea
+    attributes: {label: Environment, description: OS, architecture, installation method, and relevant limits.}
+    validations: {required: true}
+  - type: checkboxes
+    attributes:
+      label: Safety
+      options:
+        - label: This report contains no secrets or private data.
+          required: true
+        - label: This is not a security vulnerability (those use private vulnerability reporting).
+          required: true

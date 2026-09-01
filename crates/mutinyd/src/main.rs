@@ -2,7 +2,7 @@
 //! `mutinyd --mcp-stdio <tenant> <config.json>` speaks MCP on stdin/stdout for standard clients.
 
 use mutinyd::{banner, Config, MutinyServer};
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 /// The binary's allocator (docs/M8-MAINTENANCE.md, S7): glibc keeps freed arena pages resident —
 /// the nightly soak measured resident ≈ 5× live data, all of it *freed* transients from the
@@ -15,12 +15,13 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 const HELP: &str = "\
 mutinyd — MutinyDB's one surface: SQL, typed, and MCP doors over one admission boundary.
 
-  COMPOSED-DEVELOPMENT BUILD. Every linked component is release-quarantined
-  (components.lock.json); this binary is NOT a supported or distributable artifact
-  until M8's release gates clear. docs/M6-SURFACE.md is the wire contract.
+  v0.1 DEVELOPER RELEASE. All four components are release-admitted. Supported for
+  evaluation; not approved for production until the EXT-KMS custody gate clears.
+  docs/M6-SURFACE.md is the wire contract.
 
 USAGE:
   mutinyd <config.json>                     serve HTTP (and MCP at POST /v1/<tenant>/mcp)
+  mutinyd init [config.json]                write a safe local starter config (never overwrites)
   mutinyd --mcp-stdio <tenant> <config.json>  speak MCP JSON-RPC on stdin/stdout
   mutinyd --help
 ";
@@ -31,7 +32,9 @@ fn main() {
         print!("{HELP}");
         return;
     }
-    let result = if args[0] == "--mcp-stdio" {
+    let result = if args[0] == "init" {
+        init(&args[1..])
+    } else if args[0] == "--mcp-stdio" {
         mcp_stdio(&args[1..])
     } else {
         serve(&args[0])
@@ -40,6 +43,67 @@ fn main() {
         eprintln!("mutinyd failed: {error}");
         std::process::exit(1);
     }
+}
+
+fn init(args: &[String]) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if args.len() > 1 {
+        return Err("usage: mutinyd init [config.json]".to_owned());
+    }
+    let path = std::path::Path::new(args.first().map_or("mutinydb.json", String::as_str));
+    let mut random = [0_u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut random))
+        .map_err(|error| format!("could not obtain an OS-random operator token: {error}"))?;
+    let token = random
+        .iter()
+        .fold(String::with_capacity(64), |mut text, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(text, "{byte:02x}");
+            text
+        });
+    let data_dir = path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("mutiny-data");
+    let config = serde_json::json!({
+        "listen": "127.0.0.1:7654",
+        "operator_token": token,
+        "data_dir": data_dir,
+        "embedding": {"dim": 16, "version": "mutiny-v0.1"},
+        "tenants": [{
+            "name": "agent",
+            "tables": [{
+                "name": "memory",
+                "columns": [
+                    ["memory_id", "utf8"], ["branch", "utf8"], ["body", "utf8"],
+                    ["cost_micros", "int64"], ["error", "bool"], ["event_time", "int64"]
+                ],
+                "key_column": "memory_id", "branch_column": "branch", "plane": "memory",
+                "semantic": {
+                    "body_column": "body", "event_time_column": "event_time",
+                    "cost_micros_column": "cost_micros", "error_column": "error"
+                }
+            }],
+            "semantic_standing": {
+                "topk": [{"id": "agent-recall", "text": "important facts and prior outcomes", "k": 10}],
+                "groups": [{"id": "agent-themes", "anchors": ["user preference", "tool outcome", "unresolved task"]}]
+            }
+        }]
+    });
+    let bytes = serde_json::to_vec_pretty(&config).map_err(|error| error.to_string())?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| format!("refusing to overwrite {}: {error}", path.display()))?;
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    file.write_all(b"\n").map_err(|error| error.to_string())?;
+    println!("created {}", path.display());
+    println!("start with: mutinyd {}", path.display());
+    Ok(())
 }
 
 fn serve(config_path: &str) -> Result<(), String> {

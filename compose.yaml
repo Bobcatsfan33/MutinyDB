@@ -1,0 +1,16 @@
+services:
+  mutinydb:
+    image: ${MUTINYDB_IMAGE:-ghcr.io/bobcatsfan33/mutinydb:0.1}
+    build:
+      context: .
+      args:
+        VERSION: ${MUTINYDB_VERSION:-0.1.0}
+    ports:
+      - "${MUTINYDB_PORT:-7654}:7654"
+    volumes:
+      - mutinydb-data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  mutinydb-data:

@@ -6,8 +6,8 @@
 //! moments (approving the suspension, running the taint) go through the operator HTTP door,
 //! because that separation is the point, not a limitation.
 //!
-//! Dev-only in one sense that matters: every linked component is release-quarantined, so this
-//! binary is NOT a supported artifact until M8 (the mutinyd quarantine notice governs).
+//! This demo uses the v0.1 developer release. It is supported for evaluation, but the binary is
+//! not approved for production until the external-KMS custody gate clears.
 //! Deterministic; asserts its own key moments, so a broken step is a loud step.
 
 use mutinyd::{Config, MutinyServer};
@@ -22,7 +22,7 @@ fn main() {
             "incident_demo_mcp — the flagship incident over MCP against mutinyd.\n\n  {}\n\n  \
              A scripted agent (no LLM) speaks MCP; the operator approves and taints through the\n  \
              operator HTTP door. Runs in seconds; asserts its own moments.",
-            mutinyd::QUARANTINE_NOTICE
+            mutinyd::RELEASE_NOTICE
         );
         return;
     }
@@ -91,7 +91,7 @@ fn run() -> Result<(), String> {
         "MutinyDB · the incident, end-to-end over MCP ({})",
         mutinyd::SURFACE_VERSION
     );
-    println!("{}", mutinyd::QUARANTINE_NOTICE);
+    println!("{}", mutinyd::RELEASE_NOTICE);
 
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     let config_text = format!(
