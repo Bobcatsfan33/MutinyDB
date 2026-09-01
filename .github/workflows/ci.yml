@@ -269,7 +269,9 @@ jobs:
         run: M6_SOAK_SECS=30 cargo test -p mutinyd --locked --test m6_soak -- --nocapture
       - name: Run the flagship end-to-end over MCP (the supported demo form)
         run: |
-          cargo run -p mutinyd --locked --example incident_demo_mcp -- --help | grep -q "NOT a supported"
+          help="$(cargo run -p mutinyd --locked --example incident_demo_mcp -- --help)"
+          grep -q "developer release" <<<"$help"
+          grep -q "not approved for production" <<<"$help"
           cargo run -p mutinyd --locked --example incident_demo_mcp > /dev/null
 
   m6-quickstart:
