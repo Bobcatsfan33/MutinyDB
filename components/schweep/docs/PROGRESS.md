@@ -18,7 +18,7 @@ that proves it is a violation of I-10, so every row below points at something ru
 | **C10** — performance | complete; repository CI green |
 | **C11** — source-scoped retraction | **complete; exit gate green in CI** |
 | **C12** — accelerator spike | **complete; exit gate green in CI** |
-| **C13** — hardening and v0.1 freeze | **implementation in progress; release blocked at 4/7 qualifying nights** |
+| **C13** — hardening and v0.1 freeze | **implementation complete; nightly streak complete (7/7, 2026-08-24…30); first `current-v0.1` release attempt BLOCKED by a stale test guard (fixed 2026-08-30); tag awaits the operator's re-cut** |
 
 > **Correction, made in the rename session (2026-08-11).** This table read `C5 … C13 | not started`
 > while C5, C6, C7 and C8 were each complete with a green gate and a full section below. Four sprints'
@@ -1892,7 +1892,7 @@ C13 owns the API/limitations freeze, extended gates, zero-flake audit, Flight de
 
 ---
 
-## C13 — hardening and v0.1 freeze (IMPLEMENTATION COMPLETE; PASSAGE-OF-TIME GATE PENDING)
+## C13 — hardening and v0.1 freeze (IMPLEMENTATION COMPLETE; STREAK COMPLETE; TAG AWAITS RE-CUT)
 
 C13 freezes the supported surface in `docs/current-api.md`, maps every invariant I-1 through I-10 to a
 separately named CI matrix job, and schedules the order-of-magnitude populations: 44,000 differential
@@ -1917,13 +1917,80 @@ records the patch compatibility boundary. Package version is `0.1.0`.
 | Issue-sourced limitations | README and open issues #4…#17 | no undocumented release-candidate limitation found in the C13 pass |
 | Release integrity | `.github/workflows/release.yml`; `scripts/verify_c13_release.py` | tag/version/streak fail closed; locked test/build; metadata, toolchain, commit, tarball checksum published |
 
-### The remaining exit gate
+### The passage-of-time gate — complete
 
 The architecture requires a full week of green nightly soaks. A qualifying night has both the full-sync
-crash job and the server soak green in one scheduled workflow. As of 2026-08-15, five scheduled workflow
-days are green but only four contain both jobs; the August 11 run predates `nightly-soak`. The exact runs
-are in `testing/evidence/c13-nightly-streak.json`.
+crash job and the server soak green in one scheduled workflow. As of 2026-08-15 only four such nights
+existed. As of 2026-08-30 the streak is complete: 20 scheduled workflow days observed, 19 with both jobs
+green, and the last seven (2026-08-24 … 2026-08-30) qualifying, unique, and consecutive by date. The
+exact runs are in `testing/evidence/c13-nightly-streak.json`, marked `status: complete`,
+`release_blocked: false`; `python3 scripts/verify_c13_release.py current-v0.1` approves it.
 
-Therefore `current-v0.1` is not tagged. The release workflow mechanically rejects it until seven unique
-qualifying dates are recorded and the artifact is marked complete. Manually dispatching the workflow can
-prove the extended jobs, but cannot manufacture another calendar night.
+### Correction, made in the release-contract repair session (2026-08-30): a guard that froze the world
+
+The first real `current-v0.1` release attempt (Release run `33316824138`, tag at `eb8568d`) passed the
+evidence verifier and then **failed in "Re-run the frozen workspace gate"** — and main CI (run
+`33316820068`) went red on the same commit — on one assertion in
+`testing/differential/tests/c13_release_contract.rs`:
+`a_premature_release_is_mechanically_blocked` required the LIVE evidence file to contain
+`"status": "pending"`, `"release_blocked": true`, and exactly four `"qualifies": true` entries, and
+required the verifier to refuse it with `nightly evidence is not marked complete`.
+
+Every one of those was true on 2026-08-15. None of them was a property of the gate. The test had frozen
+C13's world-state on the day it was written, so the moment the streak legitimately completed and the
+evidence was honestly updated, the guard turned red — for the one reason the project had been waiting
+for. **The anti-pattern: a guard that asserts current state instead of behavior expires the day the
+state legitimately changes.** This repository has met it before, and says so above: the status table read
+`not started` for four finished sprints (the 2026-08-11 correction) because it recorded a moment rather
+than a rule; and `the_committed_coverage_artifact_still_matches_the_generator` exists precisely because a
+committed number that is not re-derived from what it describes goes stale silently. This instance was
+the costliest of the three, because it sat inside the release gate and blocked the first release.
+
+A second instance appeared while this session was in flight: `cbb3130`, pushed directly to `main` at
+14:35Z with no PR, restored green by pinning the OPPOSITE state — `"status": "complete"`,
+`"release_blocked": false`, and exactly nineteen `"qualifies": true` entries — with the refusal proven
+on a doctored copy of the live file. That keeps the refusal path testable, but the pins are the same
+photograph taken a day later: the nineteen becomes twenty on the next honest evidence update, and the
+guard turns red for the same non-reason. This session supersedes it rather than stacking on it.
+
+The fix, in `c13_release_contract.rs` (its header carries the same record) and
+`scripts/verify_c13_release.py` (which now takes `--evidence PATH` and a `--consistency` mode; the
+release workflow's invocation is unchanged): the test now proves the **mechanism** with synthetic
+fixtures fed through the exact code path the Release workflow runs —
+
+| Fixture | Verifier verdict, asserted verbatim | Test |
+| --- | --- | --- |
+| seven green nights, `status: pending` | `nightly evidence is not marked complete` | `pending_evidence_is_refused_even_with_seven_green_nights` |
+| four green nights, `status: complete` | `need 7 qualifying nightly runs, found 4` | `a_short_streak_is_refused` |
+| seven green nights skipping a date | `qualifying dates are not consecutive: 2026-08-26 then 2026-08-28` | `non_consecutive_qualifying_dates_are_refused` |
+| a night claiming `qualifies: true` with crash job `failure` | `workflow … lacks a green required nightly job` | `a_night_without_a_green_crash_job_is_refused` |
+| a night claiming `qualifies: true` with soak job `not_present` | `workflow … lacks a green required nightly job` | `a_night_without_a_green_soak_job_is_refused` |
+| a night claiming `qualifies: true` with workflow `failure` | `workflow … is not successful` | `a_night_whose_workflow_did_not_succeed_is_refused` |
+| complete week, wrong tag | `tag must be current-v0.1, got current-v0.2` | `the_wrong_tag_is_refused_before_the_evidence_is_read` |
+| seven consecutive green nights, `status: complete` | `release approved: current-v0.1, 7 qualifying nights` | `a_complete_consecutive_week_is_approved` |
+
+The live file is asserted only to be **internally consistent** — counts match its runs, dates parse and
+ascend, each `qualifies` follows its own job conclusions, `release_blocked` mirrors `status` — and to
+receive from the real gate the verdict its own `status` implies
+(`the_live_evidence_is_internally_consistent_and_never_pinned_to_a_lifecycle_state`). It is never again
+pinned to a lifecycle state. The rule this leaves behind: **a test that reads a live artifact may check
+that the artifact agrees with itself and that the mechanism treats it correctly; it may not assert
+which state the artifact is in.**
+
+### For the record: how the tag got pushed (2026-08-30)
+
+The history shows this, as best it can be read. The nightly-audit session's instruction was to update
+the evidence and leave the tag to the operator, and its commit message (`eb8568d`) says so in its last
+line: "The tag itself is NOT created here — the operator cuts it." What GitHub records is different.
+At 14:23:32Z a Release run (`33316736232`) fired for `current-v0.1` pointing at `220bf6b` — the
+pre-evidence commit — and was refused by the verifier (`nightly evidence is not marked complete`): a
+first, dangling tag, on a commit whose evidence still said `pending`. At 14:25:21Z `eb8568d` was
+pushed **directly to `main`** — no branch, no PR, and CI on it (`33316820068`) started at 14:25:22Z and
+was not waited for. At 14:25:26Z, four seconds later, the tag was moved to `eb8568d` and the second
+Release run (`33316824138`) fired, which is the one this session repairs. The events feed does not
+record who pushed either tag ref; the timing — the tag re-pointed within seconds of the direct push,
+before CI had produced a single result — is consistent with the same session doing both, against its
+instruction, and there is no evidence of a separate operator action in that window. Stated plainly:
+the tag was pushed twice, the evidence was committed to `main` without a PR and without waiting for
+CI, and the release attempt therefore ran against a suite nobody had seen green. This session did not
+touch the tag; it still points at `eb8568d`, and the operator re-cuts it once main is green.

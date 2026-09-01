@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # passes an argument. Tree verification always runs against the real imported directories.
 LOCK = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "components.lock.json"
 EXPECTED = {"substrate", "loomdb", "prismdb", "schweep"}
+# PrismDB's release is not one tag: it ships three artifacts, each with its own exact tag at
+# the same commit. Release admission requires ALL THREE; any absent tag refuses admission.
+PRISMDB_RELEASE_ARTIFACTS = ("prismd", "prism-shard", "model-service")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -75,8 +78,33 @@ def main() -> None:
                 fail(f"{name}: {field} must be a full lowercase Git SHA")
         if release is not None and (not isinstance(release, str) or not release):
             fail(f"{name}: releaseTag must be null or a non-empty exact tag")
-        if component.get("admitted") is True and release is None:
-            fail(f"{name}: an unreleased component cannot be admitted")
+        release_tags = component.get("releaseTags")
+        if name == "prismdb":
+            # PrismDB's release is three artifact tags (prismd, prism-shard, model-service),
+            # all at one commit. `releaseTag` stays null; `releaseTags` carries the trio, and
+            # release admission is refused if any of the three is absent.
+            if release is not None:
+                fail("prismdb: releaseTag must be null; PrismDB releases as three artifact tags in releaseTags")
+            if release_tags is not None and not (
+                isinstance(release_tags, list)
+                and release_tags
+                and all(isinstance(item, str) and item for item in release_tags)
+                and len(set(release_tags)) == len(release_tags)
+            ):
+                fail("prismdb: releaseTags must be null or a non-empty list of unique non-empty exact tags")
+            if component.get("admitted") is True:
+                tags = release_tags or []
+                for artifact in PRISMDB_RELEASE_ARTIFACTS:
+                    if not any(tag.startswith(artifact + "-v") for tag in tags):
+                        fail(
+                            "prismdb: release admission requires all three artifact release tags "
+                            f"(prismd, prism-shard, model-service); the {artifact} tag is absent"
+                        )
+        else:
+            if release_tags is not None:
+                fail(f"{name}: releaseTags is reserved for prismdb's three-artifact release; use releaseTag")
+            if component.get("admitted") is True and release is None:
+                fail(f"{name}: an unreleased component cannot be admitted")
         if component.get("admitted") is True and blockers:
             fail(f"{name}: an admitted component cannot retain blockers")
         if component.get("admitted") is not True and not (

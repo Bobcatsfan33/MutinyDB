@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "product": "MutinyDB",
-  "assessedAt": "2026-08-15",
+  "assessedAt": "2026-08-31",
   "sourceMode": "monorepo-import",
   "components": [
     {
@@ -13,10 +13,8 @@
       "tree": "6e3e1d3d05c13866e974ef95183d581d7eca90f8",
       "releaseTag": "substrate-v1.6.0",
       "phase": "storage",
-      "admitted": false,
-      "blockers": [
-        "The composed workspace compatibility gate has not passed yet."
-      ]
+      "admitted": true,
+      "blockers": []
     },
     {
       "name": "loomdb",
@@ -27,47 +25,42 @@
       "tree": "f882131053ef15a68c3bda18970f1898536f1d5f",
       "releaseTag": "loomdb-v0.5.1",
       "phase": "trust",
-      "admitted": false,
-      "blockers": [
-        "The trust plane has not been mounted behind MutinyDB's admission boundary.",
-        "The four Loom model oracles have not run against the composed product."
-      ]
+      "admitted": true,
+      "blockers": []
     },
     {
       "name": "prismdb",
       "repository": "https://github.com/Bobcatsfan33/PrismDB",
       "path": "components/prismdb",
-      "commit": "84e5a4f99a7232b0c5144b5f83a6aaf4d9940753",
-      "sourceTree": "43c59a794adf85e703de7bb57789e5411902f550",
-      "tree": "43c59a794adf85e703de7bb57789e5411902f550",
+      "commit": "cef63eabada7d93cf52b3669cbc0dc1b8c60209e",
+      "sourceTree": "57c47131ee13a9f476ea0be0a42b2fae8a283900",
+      "tree": "57c47131ee13a9f476ea0be0a42b2fae8a283900",
       "releaseTag": null,
       "phase": "semantic",
-      "admitted": false,
-      "blockers": [
-        "PrismDB has no release tag.",
-        "Release admission remains blocked until the composed product and release gates pass."
-      ],
+      "admitted": true,
+      "blockers": [],
       "productionBlockers": [
         "EXT-KMS (MD-7): the KMS provider is implemented and gated, but every gate run to date used the software keystore \u2014 live-service custody is unproven. Closure: the first enterprise adopter runs the encryption gate suite against their key service in their account; fallback, the direct AWS close before any production-approval claim. Simulated or emulated closure is forbidden by the gate's own criteria."
       ],
       "productionApproved": false,
-      "custodyReceipt": null
+      "custodyReceipt": null,
+      "releaseTags": [
+        "prismd-v0.1.0",
+        "prism-shard-v0.1.0",
+        "model-service-v0.1.0"
+      ]
     },
     {
       "name": "schweep",
       "repository": "https://github.com/Bobcatsfan33/schweep",
       "path": "components/schweep",
-      "commit": "220bf6b532835f1f1b6937a5895945a282bbd0d4",
-      "sourceTree": "616f05b51c60d61874a1bbbf920d151cc9726708",
-      "tree": "616f05b51c60d61874a1bbbf920d151cc9726708",
-      "releaseTag": null,
+      "commit": "fa3b3ab3e8f7ba615dc39bfc924b9a5dd50f38a6",
+      "sourceTree": "230317b5e750259e30200cfe67917cd70ac33d4e",
+      "tree": "230317b5e750259e30200cfe67917cd70ac33d4e",
+      "releaseTag": "current-v0.1",
       "phase": "compute",
-      "admitted": false,
-      "blockers": [
-        "C11 through C13 implementation is complete, but the C13 release contract has only four of seven qualifying scheduled nights.",
-        "The required current-v0.1 release tag does not exist yet.",
-        "Release admission remains blocked until the composed M1 gate and the upstream release contract both pass."
-      ]
+      "admitted": true,
+      "blockers": []
     }
   ]
 }

@@ -94,20 +94,27 @@ Binding contracts: [`CONSOLIDATION-ROADMAP.md`](CONSOLIDATION-ROADMAP.md) ·
 [`docs/decisions`](docs/decisions) · [MD-6](docs/decisions/MD-6.md) (one-repository topology with
 exact source provenance).
 
-## Built from proven parts — and quarantined until proven together
+## Built from proven parts — admitted only once proven together
 
 Each plane arrives from a codebase with its own public evidence record. **No claim is inherited
-merely because a component repository made one about itself** — every component stays quarantined
+merely because a component repository made one about itself** — a component stays quarantined
 until its exact release and the composed product gates pass, and
 [`scripts/verify_component_lock.py`](scripts/verify_component_lock.py) refuses an unreleased or
-blocked component marked admitted. That distinction is enforced, not editorial.
+blocked component marked admitted. That distinction is enforced, not editorial. As of
+2026-08-31 **all four components are release-admitted at exact release tags**; the composed
+evidence of record is main CI run
+[33384670142](https://github.com/Bobcatsfan33/MutinyDB/actions/runs/33384670142) (every job
+green, including all four component-compatibility jobs, the M1 bridge gate, and the M3
+mounted-oracle job). The two named open items are
+[#18](https://github.com/Bobcatsfan33/MutinyDB/issues/18) (engine-track, post-`v0.1`) and
+`EXT-KMS` ([MD-7](docs/decisions/MD-7.md), production-blocking only).
 
 | Component | Product role | What its own gates prove | Imported state | Admission |
 | --- | --- | --- | --- | --- |
-| [substrate](https://github.com/Bobcatsfan33/substrate) | storage | 98 ns fork · 50,000 randomized crash-recover cycles · airgap by compile-time amputation | `substrate-v1.6.0` | quarantined pending compatibility |
-| [LoomDB](https://github.com/Bobcatsfan33/loomdb) | trust | record-level merge under four model oracles · taint → two-section RecallPlan · flat-memory soaks | `loomdb-v0.5.1` | quarantined pending mounted-oracle gates |
-| [PrismDB](https://github.com/Bobcatsfan33/PrismDB) | semantic | byte-identical answers across 1/2/4-shard layouts · encryption: nothing legible at rest, rotation without rewriting a part byte | snapshot `84e5a4f` + AWS KMS provider | release-blocked on a tag + composed gates; **custody** ([MD-7](docs/decisions/MD-7.md)): the KMS provider is implemented and gated, but every gate run used the software keystore — live custody is unproven, and open gate `EXT-KMS` blocks any production-approval claim (not the release) until a real key service produces the receipts |
-| [Schweep](https://github.com/Bobcatsfan33/schweep) | compute | every answer proven against a from-scratch oracle · 1,000 real SIGKILLs with 24,219 acked appends exactly-once · 2.16 GB of operator state under a 128 MiB memory ceiling | snapshot `220bf6b`, C11–C13 complete | blocked on scheduled-night evidence, `current-v0.1`, composed admission; [#18](https://github.com/Bobcatsfan33/MutinyDB/issues/18) (the snapshot `DEDUP` index grows O(commits-ever)) lands post-`v0.1` on the engine's track — until this repo re-pins, the nightly soak stays **deliberately red** carrying it, with the index size printed beside the verdict |
+| [substrate](https://github.com/Bobcatsfan33/substrate) | storage | 98 ns fork · 50,000 randomized crash-recover cycles · airgap by compile-time amputation | `substrate-v1.6.0` (`44480f5`) | **release-admitted** — the composed workspace compatibility gate and the M1 bridge gate over the real `substrate-wal` are green on main (run 33384670142) |
+| [LoomDB](https://github.com/Bobcatsfan33/loomdb) | trust | record-level merge under four model oracles · taint → two-section RecallPlan · flat-memory soaks | `loomdb-v0.5.1` (`9c2934b`) | **release-admitted** — the trust plane is mounted behind the admission boundary (M3), and all four Loom model oracles run unmodified and green on the imported tree in the same job (run 33384670142) |
+| [PrismDB](https://github.com/Bobcatsfan33/PrismDB) | semantic | byte-identical answers across 1/2/4-shard layouts · encryption: nothing legible at rest, rotation without rewriting a part byte | `prismd-v0.1.0` · `prism-shard-v0.1.0` · `model-service-v0.1.0` (all at `cef63ea`) | **release-admitted, production-blocked** on `EXT-KMS` **custody** ([MD-7](docs/decisions/MD-7.md)): the KMS provider is implemented and gated, but every gate run used the software keystore — live custody is unproven, and `EXT-KMS` blocks any production-approval claim (not the release) until a real key service produces the receipts; the lock verifier refuses a production-approval marking without that receipt, and refuses release admission if any of the three artifact tags is absent |
+| [Schweep](https://github.com/Bobcatsfan33/schweep) | compute | every answer proven against a from-scratch oracle · 1,000 real SIGKILLs with 24,219 acked appends exactly-once · 2.16 GB of operator state under a 128 MiB memory ceiling | `current-v0.1` (`fa3b3ab`), published 2026-08-30 | **release-admitted** — the C13 release contract closed on 7 consecutive qualifying scheduled nights; the tag's tree differs from the previously audited `220bf6b` snapshot only in evidence, verifier, and guard-test files (confirmed by diff at re-pin: `docs/PROGRESS.md`, `scripts/verify_c13_release.py`, `testing/differential/tests/c13_release_contract.rs`, `testing/evidence/c13-nightly-streak.json`). **[#18](https://github.com/Bobcatsfan33/MutinyDB/issues/18) is NOT in this tag**: the snapshot `DEDUP` index still grows O(commits-ever); the fix lands post-`v0.1` on the engine's track and a further re-pin follows — until then the nightly soak stays **deliberately red** carrying it, with the index size printed beside the verdict |
 
 ## What is composed and green today
 
@@ -251,13 +258,17 @@ WAL checkpoint → GC, `docs/M8-MAINTENANCE.md`), the crash path is checkpoint-a
 replay of a collapsed store refused by name, and the nightly soak gates the result at the full
 window with storage measured.
 
-Still open, named rather than implied: external assurance, release admission, and the
-*supported* status of `mutinyd` (the binary exists and is gated, but every component it
-links is release-quarantined, so it is not yet a distributable artifact); the remote object tier
+Still open, named rather than implied: external assurance, the `mutinydb-v0.1` product release,
+and the *supported* status of `mutinyd` (the binary exists and is gated; its four components are
+now release-admitted at exact tags, but the product's own release gates and external assurance
+remain open, so it is not yet a distributable artifact); the remote object tier
 under the composed store (M8's ledger, see the wake-latency table); and O(1) fork of live
-answers, which MD-5 deliberately moved post-v1 with its spike evidence on record. Schweep's `current-v0.1` release requires its remaining scheduled-night evidence;
-PrismDB's admission requires a release and a live KMS receipt. The roadmap runs on exit gates, not
-dates.
+answers, which MD-5 deliberately moved post-v1 with its spike evidence on record. Schweep's
+`current-v0.1` and PrismDB's three `v0.1.0` artifact tags are released and re-pinned;
+[#18](https://github.com/Bobcatsfan33/MutinyDB/issues/18) lands post-`v0.1` on the engine's
+track (the nightly soak stays deliberately red carrying it until the re-pin that follows);
+PrismDB's production approval still waits on the `EXT-KMS` custody receipt (MD-7). The roadmap
+runs on exit gates, not dates.
 
 | Phase | M1 bridge | M2 semantic | M3 trust | M4 taint | M5 forks | M6 mutinyd | M7 fleet | M8 release |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "as_of": "2026-08-15",
+  "as_of": "2026-08-30",
   "required_consecutive_nights": 7,
-  "observed_scheduled_workflow_days": 5,
-  "observed_complete_soak_nights": 4,
-  "status": "pending",
-  "release_blocked": true,
+  "observed_scheduled_workflow_days": 20,
+  "observed_complete_soak_nights": 19,
+  "status": "complete",
+  "release_blocked": false,
   "definition": "A qualifying night is one scheduled CI workflow in which both nightly crash gate (SyncPolicy::Full) and nightly soak (schweepd under load) conclude success. Workflow success alone is not enough.",
   "runs": [
     {
@@ -48,6 +48,141 @@
       "date": "2026-08-15",
       "run_id": 31863129117,
       "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31863129117",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-16",
+      "run_id": 31925669662,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31925669662",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-17",
+      "run_id": 31993276388,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/31993276388",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-18",
+      "run_id": 32097578539,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/32097578539",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-19",
+      "run_id": 32214290360,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/32214290360",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-20",
+      "run_id": 32330368732,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/32330368732",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-21",
+      "run_id": 32445623441,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/32445623441",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-22",
+      "run_id": 32550454943,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/32550454943",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-23",
+      "run_id": 32616941304,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/32616941304",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-24",
+      "run_id": 32688922885,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/32688922885",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-25",
+      "run_id": 32807468050,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/32807468050",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-26",
+      "run_id": 32928895016,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/32928895016",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-27",
+      "run_id": 33081412190,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/33081412190",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-28",
+      "run_id": 33185229950,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/33185229950",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-29",
+      "run_id": 33247208465,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/33247208465",
+      "workflow_conclusion": "success",
+      "nightly_crash": "success",
+      "nightly_soak": "success",
+      "qualifies": true
+    },
+    {
+      "date": "2026-08-30",
+      "run_id": 33303722646,
+      "url": "https://github.com/Bobcatsfan33/schweep/actions/runs/33303722646",
       "workflow_conclusion": "success",
       "nightly_crash": "success",
       "nightly_soak": "success",
