@@ -80,7 +80,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         id: meta
         with:
           images: ghcr.io/${{ github.repository_owner }}/mutinydb
