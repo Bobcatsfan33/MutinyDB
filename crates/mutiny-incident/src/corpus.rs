@@ -219,7 +219,7 @@ pub fn parse(text: &str) -> Result<Corpus, CorpusError> {
                     .split(',')
                     .map(parse_source)
                     .collect::<Result<Vec<_>, String>>()
-                    .map_err(&fail)?;
+                    .map_err(fail)?;
                 let payload = &fields[7..];
                 let row =
                     match table {
